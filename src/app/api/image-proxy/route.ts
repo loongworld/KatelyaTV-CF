@@ -83,9 +83,11 @@ export async function GET(request: Request) {
       signal: controller.signal,
       redirect: 'follow',
       headers: {
-        Referer: 'https://movie.douban.com/',
+        // 注意：豆瓣图床对带 movie.douban.com Referer 的请求返回 403，
+        // 因此这里刻意不设置 Referer。
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/*,*/*;q=0.8',
       },
     });
 
@@ -96,14 +98,20 @@ export async function GET(request: Request) {
       );
     }
 
-    if (!imageResponse.ok) {
+    const contentType = imageResponse.headers.get('content-type') || '';
+    const isImage = contentType.toLowerCase().startsWith('image/');
+
+    // 豆瓣图床对无 Referer 请求会返回 418 但 body 仍是图片，按成功处理
+    const okStatus =
+      imageResponse.ok || (imageResponse.status === 418 && isImage);
+
+    if (!okStatus) {
       return addCorsHeaders(
         NextResponse.json({ error: imageResponse.statusText }, { status: imageResponse.status })
       );
     }
 
-    const contentType = imageResponse.headers.get('content-type') || '';
-    if (!contentType.toLowerCase().startsWith('image/')) {
+    if (!isImage) {
       return addCorsHeaders(
         NextResponse.json({ error: '目标不是图片' }, { status: 415 })
       );
