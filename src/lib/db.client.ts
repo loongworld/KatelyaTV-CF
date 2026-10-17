@@ -1339,12 +1339,7 @@ export async function getSkipConfig(
         return cachedConfigs[key];
       }
 
-      // 缓存未命中，从服务器获取
-      const authInfo = getAuthInfoFromBrowserCookie();
-      if (!authInfo?.username) {
-        return null;
-      }
-
+      // 缓存未命中，从服务器获取（身份由服务端会话 Cookie 提供）
       const response = await fetch('/api/skip-configs', {
         method: 'POST',
         headers: {
@@ -1353,9 +1348,6 @@ export async function getSkipConfig(
         body: JSON.stringify({
           action: 'get',
           key,
-          username: authInfo.username,
-          signature: authInfo.signature,
-          timestamp: authInfo.timestamp,
         }),
       });
 
@@ -1400,12 +1392,7 @@ export async function saveSkipConfig(
       allConfigs[key] = config;
       localStorage.setItem(SKIP_CONFIGS_KEY, JSON.stringify(allConfigs));
     } else {
-      // 数据库模式
-      const authInfo = getAuthInfoFromBrowserCookie();
-      if (!authInfo?.username) {
-        throw new Error('用户未登录');
-      }
-
+      // 数据库模式：身份由服务端会话 Cookie 提供
       const response = await fetch('/api/skip-configs', {
         method: 'POST',
         headers: {
@@ -1415,9 +1402,6 @@ export async function saveSkipConfig(
           action: 'set',
           key,
           config,
-          username: authInfo.username,
-          signature: authInfo.signature,
-          timestamp: authInfo.timestamp,
         }),
       });
 
@@ -1456,12 +1440,7 @@ export async function getAllSkipConfigs(): Promise<Record<string, EpisodeSkipCon
         return cachedConfigs;
       }
 
-      // 缓存未命中，从服务器获取
-      const authInfo = getAuthInfoFromBrowserCookie();
-      if (!authInfo?.username) {
-        return {};
-      }
-
+      // 缓存未命中，从服务器获取（身份由服务端会话 Cookie 提供）
       const response = await fetch('/api/skip-configs', {
         method: 'POST',
         headers: {
@@ -1469,9 +1448,6 @@ export async function getAllSkipConfigs(): Promise<Record<string, EpisodeSkipCon
         },
         body: JSON.stringify({
           action: 'getAll',
-          username: authInfo.username,
-          signature: authInfo.signature,
-          timestamp: authInfo.timestamp,
         }),
       });
 
@@ -1508,12 +1484,7 @@ export async function deleteSkipConfig(source: string, id: string): Promise<void
       delete allConfigs[key];
       localStorage.setItem(SKIP_CONFIGS_KEY, JSON.stringify(allConfigs));
     } else {
-      // 数据库模式
-      const authInfo = getAuthInfoFromBrowserCookie();
-      if (!authInfo?.username) {
-        throw new Error('用户未登录');
-      }
-
+      // 数据库模式：身份由服务端会话 Cookie 提供
       const response = await fetch('/api/skip-configs', {
         method: 'POST',
         headers: {
@@ -1522,9 +1493,6 @@ export async function deleteSkipConfig(source: string, id: string): Promise<void
         body: JSON.stringify({
           action: 'delete',
           key,
-          username: authInfo.username,
-          signature: authInfo.signature,
-          timestamp: authInfo.timestamp,
         }),
       });
 

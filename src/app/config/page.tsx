@@ -1,22 +1,47 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export const dynamic = 'force-dynamic';
 
 export default function ConfigPage() {
   const [copied, setCopied] = useState(false);
-  const [format, setFormat] = useState<'json' | 'base64'>('json');
+  const [format, setFormat] = useState<'json' | 'txt'>('json');
+  const [configUrl, setConfigUrl] = useState('');
+  const [error, setError] = useState('');
 
-  const getConfigUrl = useCallback(() => {
-    if (typeof window === 'undefined') return '';
-    const baseUrl = window.location.origin;
-    return `${baseUrl}/api/tvbox?format=${format}`;
+  // 订阅地址带令牌，需要向服务端申请（仅站长可见）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/admin/tvbox?format=${format}`, {
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || `获取订阅地址失败（${response.status}）`);
+        }
+        const data = await response.json();
+        if (!cancelled) {
+          setConfigUrl(data.url || '');
+          setError('');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setConfigUrl('');
+          setError(err instanceof Error ? err.message : '获取订阅地址失败');
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [format]);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(getConfigUrl());
+      await navigator.clipboard.writeText(configUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -42,11 +67,11 @@ export default function ConfigPage() {
             </label>
             <select
               value={format}
-              onChange={(e) => setFormat(e.target.value as 'json' | 'base64')}
+              onChange={(e) => setFormat(e.target.value as 'json' | 'txt')}
               className="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
             >
               <option value="json">JSON 格式</option>
-              <option value="base64">Base64 格式</option>
+              <option value="txt">Base64 格式</option>
             </select>
           </div>
 
@@ -54,12 +79,13 @@ export default function ConfigPage() {
             <input
               type="text"
               readOnly
-              value={getConfigUrl()}
+              value={configUrl || (error ? '' : '获取中…')}
               className="flex-1 p-3 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-sm"
             />
             <button
               onClick={handleCopy}
-              className={`px-4 py-3 rounded-md font-medium transition-colors ${
+              disabled={!configUrl}
+              className={`px-4 py-3 rounded-md font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 copied
                   ? 'bg-green-500 text-white'
                   : 'bg-blue-500 hover:bg-blue-600 text-white'
@@ -68,6 +94,13 @@ export default function ConfigPage() {
               {copied ? '已复制' : '复制'}
             </button>
           </div>
+
+          {error && (
+            <p className="mt-3 text-sm text-red-500">{error}</p>
+          )}
+          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            订阅地址包含访问令牌，仅站长可见；请勿公开分享，泄露后可在服务端更换密钥使其失效。
+          </p>
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-6 mb-6">

@@ -70,7 +70,7 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
             <li key={item.href} className='flex-shrink-0 w-1/5'>
               <Link
                 href={item.href}
-                className={`flex flex-col items-center justify-center w-full h-14 gap-1 text-xs transition-all duration-200 relative ${
+                className={`flex flex-col items-center justify-center w-full h-16 gap-1 text-xs transition-all duration-200 relative ${
                   active
                     ? 'transform -translate-y-1'
                     : 'hover:transform hover:-translate-y-0.5'

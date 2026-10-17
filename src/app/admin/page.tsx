@@ -1704,7 +1704,11 @@ function AdminPageClient() {
     if (!isConfirmed) return;
 
     try {
-      const response = await fetch(`/api/admin/reset`);
+      const response = await fetch(`/api/admin/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'RESET' }),
+      });
       if (!response.ok) {
         throw new Error(`重置失败: ${response.status}`);
       }

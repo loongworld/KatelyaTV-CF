@@ -4,23 +4,84 @@ import { addCorsHeaders, handleOptionsRequest } from '@/lib/cors';
 
 export const runtime = 'edge';
 
+const MAX_BYTES = 8 * 1024 * 1024; // 8MB
+const FETCH_TIMEOUT_MS = 8000;
+
 // 处理OPTIONS预检请求（OrionTV客户端需要）
 export async function OPTIONS() {
   return handleOptionsRequest();
 }
 
-// OrionTV 兼容接口
+/** 判断主机名是否为内网/保留地址，防止 SSRF */
+function isBlockedHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host.endsWith('.home.arpa') ||
+    host === '0.0.0.0'
+  ) {
+    return true;
+  }
+
+  // IPv4 字面量
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 10 || a === 127 || a === 0) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+
+  // IPv6 字面量
+  if (host.includes(':')) {
+    if (host === '::1' || host === '::') return true;
+    if (host.startsWith('fe80') || host.startsWith('fc') || host.startsWith('fd')) return true;
+    // IPv4-mapped ::ffff:a.b.c.d
+    const mapped = host.match(/::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (mapped) return isBlockedHost(mapped[1]);
+  }
+  return false;
+}
+
+function validateTarget(raw: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (isBlockedHost(url.hostname)) return null;
+  return url;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const imageUrl = searchParams.get('url');
 
   if (!imageUrl) {
-    const response = NextResponse.json({ error: 'Missing image URL' }, { status: 400 });
-    return addCorsHeaders(response);
+    return addCorsHeaders(NextResponse.json({ error: 'Missing image URL' }, { status: 400 }));
   }
 
+  const target = validateTarget(imageUrl);
+  if (!target) {
+    return addCorsHeaders(
+      NextResponse.json({ error: 'URL 不合法（仅支持公网 http/https 图片地址）' }, { status: 400 })
+    );
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const imageResponse = await fetch(imageUrl, {
+    const imageResponse = await fetch(target.toString(), {
+      signal: controller.signal,
+      redirect: 'follow',
       headers: {
         Referer: 'https://movie.douban.com/',
         'User-Agent':
@@ -28,46 +89,56 @@ export async function GET(request: Request) {
       },
     });
 
+    // 跟随重定向后再次校验最终地址，防止跳转到内网
+    if (!validateTarget(imageResponse.url)) {
+      return addCorsHeaders(
+        NextResponse.json({ error: '重定向目标不合法' }, { status: 400 })
+      );
+    }
+
     if (!imageResponse.ok) {
-      const response = NextResponse.json(
-        { error: imageResponse.statusText },
-        { status: imageResponse.status }
+      return addCorsHeaders(
+        NextResponse.json({ error: imageResponse.statusText }, { status: imageResponse.status })
       );
-      return addCorsHeaders(response);
     }
 
-    const contentType = imageResponse.headers.get('content-type');
-
-    if (!imageResponse.body) {
-      const response = NextResponse.json(
-        { error: 'Image response has no body' },
-        { status: 500 }
+    const contentType = imageResponse.headers.get('content-type') || '';
+    if (!contentType.toLowerCase().startsWith('image/')) {
+      return addCorsHeaders(
+        NextResponse.json({ error: '目标不是图片' }, { status: 415 })
       );
-      return addCorsHeaders(response);
     }
 
-    // 创建响应头
+    const declaredLength = Number(imageResponse.headers.get('content-length') || '0');
+    if (declaredLength > MAX_BYTES) {
+      return addCorsHeaders(
+        NextResponse.json({ error: '图片超过大小限制' }, { status: 413 })
+      );
+    }
+
+    const buffer = await imageResponse.arrayBuffer();
+    if (buffer.byteLength > MAX_BYTES) {
+      return addCorsHeaders(
+        NextResponse.json({ error: '图片超过大小限制' }, { status: 413 })
+      );
+    }
+
     const headers = new Headers();
-    if (contentType) {
-      headers.set('Content-Type', contentType);
-    }
+    headers.set('Content-Type', contentType);
+    headers.set('Content-Length', String(buffer.byteLength));
+    // 站点已要求登录，不使用公开 CDN 缓存
+    headers.set('Cache-Control', 'private, max-age=604800');
 
-    // 设置缓存头（可选）
-    headers.set('Cache-Control', 'public, max-age=15720000, s-maxage=15720000'); // 缓存半年
-    headers.set('CDN-Cache-Control', 'public, s-maxage=15720000');
-    headers.set('Vercel-CDN-Cache-Control', 'public, s-maxage=15720000');
-
-    // 直接返回图片流
-    const response = new Response(imageResponse.body, {
-      status: 200,
-      headers,
-    });
-    return addCorsHeaders(response);
+    return addCorsHeaders(new Response(buffer, { status: 200, headers }));
   } catch (error) {
-    const response = NextResponse.json(
-      { error: 'Error fetching image' },
-      { status: 500 }
+    const aborted = error instanceof Error && error.name === 'AbortError';
+    return addCorsHeaders(
+      NextResponse.json(
+        { error: aborted ? '图片获取超时' : 'Error fetching image' },
+        { status: aborted ? 504 : 500 }
+      )
     );
-    return addCorsHeaders(response);
+  } finally {
+    clearTimeout(timer);
   }
 }

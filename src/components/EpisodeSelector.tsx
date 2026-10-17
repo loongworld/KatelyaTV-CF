@@ -11,7 +11,7 @@ import React, {
 } from 'react';
 
 import { SearchResult } from '@/lib/types';
-import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
+import { probeM3u8, processImageUrl } from '@/lib/utils';
 
 // 定义视频信息类型
 interface VideoInfo {
@@ -117,7 +117,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     setAttemptedSources((prev) => new Set(prev).add(sourceKey));
 
     try {
-      const info = await getVideoResolutionFromM3u8(episodeUrl);
+      const info = await probeM3u8(episodeUrl, 3000);
       setVideoInfoMap((prev) => new Map(prev).set(sourceKey, info));
     } catch (error) {
       // 失败时保存错误状态

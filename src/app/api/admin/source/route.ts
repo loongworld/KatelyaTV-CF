@@ -2,169 +2,156 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+import { AdminConfig } from '@/lib/admin.types';
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { getConfig } from '@/lib/config';
+import { getConfig, invalidateConfigCache } from '@/lib/config';
 import { getStorage } from '@/lib/db';
 import { IStorage } from '@/lib/types';
 
 export const runtime = 'edge';
 
-// 支持的操作类型
 type Action = 'add' | 'disable' | 'enable' | 'delete' | 'sort';
+const ACTIONS: Action[] = ['add', 'disable', 'enable', 'delete', 'sort'];
+const MAX_BATCH_OPS = 200;
 
-interface BaseBody {
+interface SourceOp {
   action?: Action;
+  key?: string;
+  name?: string;
+  api?: string;
+  detail?: string;
+  is_adult?: boolean;
+  order?: string[];
+}
+
+/** 对内存中的配置应用一条操作，返回错误信息（成功则为 null） */
+function applySourceOp(adminConfig: AdminConfig, op: SourceOp): string | null {
+  switch (op.action) {
+    case 'add': {
+      if (!op.key || !op.name || !op.api) return '缺少必要参数';
+      if (adminConfig.SourceConfig.some((s) => s.key === op.key)) return '该源已存在';
+      adminConfig.SourceConfig.push({
+        key: op.key,
+        name: op.name,
+        api: op.api,
+        detail: op.detail,
+        from: 'custom',
+        disabled: false,
+        is_adult: op.is_adult || false,
+      });
+      return null;
+    }
+    case 'disable':
+    case 'enable': {
+      if (!op.key) return '缺少 key 参数';
+      const entry = adminConfig.SourceConfig.find((s) => s.key === op.key);
+      if (!entry) return '源不存在';
+      entry.disabled = op.action === 'disable';
+      return null;
+    }
+    case 'delete': {
+      if (!op.key) return '缺少 key 参数';
+      const idx = adminConfig.SourceConfig.findIndex((s) => s.key === op.key);
+      if (idx === -1) return '源不存在';
+      if (adminConfig.SourceConfig[idx].from === 'config') return '该源不可删除';
+      adminConfig.SourceConfig.splice(idx, 1);
+      return null;
+    }
+    case 'sort': {
+      if (!Array.isArray(op.order)) return '排序列表格式错误';
+      const map = new Map(adminConfig.SourceConfig.map((s) => [s.key, s]));
+      const newList: typeof adminConfig.SourceConfig = [];
+      op.order.forEach((k) => {
+        const item = map.get(k);
+        if (item) {
+          newList.push(item);
+          map.delete(k);
+        }
+      });
+      adminConfig.SourceConfig.forEach((item) => {
+        if (map.has(item.key)) newList.push(item);
+      });
+      adminConfig.SourceConfig = newList;
+      return null;
+    }
+    default:
+      return '未知操作';
+  }
 }
 
 export async function POST(request: NextRequest) {
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
   if (storageType === 'localstorage') {
-    return NextResponse.json(
-      {
-        error: '不支持本地存储进行管理员配置',
-      },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: '不支持本地存储进行管理员配置' }, { status: 400 });
   }
 
   try {
-    const body = (await request.json()) as BaseBody & Record<string, any>;
-    const { action } = body;
-
-    const authInfo = getAuthInfoFromCookie(request);
-    if (!authInfo || !authInfo.username) {
+    const body = (await request.json()) as Record<string, any>;
+    const authInfo = await getAuthInfoFromCookie(request);
+    if (!authInfo) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    const username = authInfo.username;
 
-    // 基础校验
-    const ACTIONS: Action[] = ['add', 'disable', 'enable', 'delete', 'sort'];
-    if (!username || !action || !ACTIONS.includes(action)) {
-      return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
-    }
-
-    // 获取配置与存储
     const adminConfig = await getConfig();
     const storage: IStorage | null = getStorage();
 
-    // 权限与身份校验
-    if (username !== process.env.USERNAME) {
-      const userEntry = adminConfig.UserConfig.Users.find(
-        (u) => u.username === username
-      );
+    // 权限：站长或 role=admin 的用户
+    if (authInfo.role !== 'owner' && authInfo.username !== process.env.USERNAME) {
+      const userEntry = adminConfig.UserConfig.Users.find((u) => u.username === authInfo.username);
       if (!userEntry || userEntry.role !== 'admin') {
         return NextResponse.json({ error: '权限不足' }, { status: 401 });
       }
     }
 
-    switch (action) {
-      case 'add': {
-        const { key, name, api, detail, is_adult } = body as {
-          key?: string;
-          name?: string;
-          api?: string;
-          detail?: string;
-          is_adult?: boolean;
-        };
-        if (!key || !name || !api) {
-          return NextResponse.json({ error: '缺少必要参数' }, { status: 400 });
+    // 批量：一次读取、一次写入，避免流水线多次读改写造成丢更新
+    if (body.action === 'batch') {
+      const ops = body.ops as SourceOp[];
+      if (!Array.isArray(ops) || ops.length === 0 || ops.length > MAX_BATCH_OPS) {
+        return NextResponse.json({ error: 'ops 必须为 1-200 条的数组' }, { status: 400 });
+      }
+      const errors: Array<{ index: number; error: string }> = [];
+      ops.forEach((op, index) => {
+        if (!op || !ACTIONS.includes(op.action as Action)) {
+          errors.push({ index, error: '参数格式错误' });
+          return;
         }
-        if (adminConfig.SourceConfig.some((s) => s.key === key)) {
-          return NextResponse.json({ error: '该源已存在' }, { status: 400 });
-        }
-        adminConfig.SourceConfig.push({
-          key,
-          name,
-          api,
-          detail,
-          from: 'custom',
-          disabled: false,
-          is_adult: is_adult || false, // 确保处理 is_adult 字段
-        });
-        break;
+        const err = applySourceOp(adminConfig, op);
+        if (err) errors.push({ index, error: err });
+      });
+      if (errors.length === ops.length) {
+        return NextResponse.json({ error: '全部操作失败', errors }, { status: 400 });
       }
-      case 'disable': {
-        const { key } = body as { key?: string };
-        if (!key)
-          return NextResponse.json({ error: '缺少 key 参数' }, { status: 400 });
-        const entry = adminConfig.SourceConfig.find((s) => s.key === key);
-        if (!entry)
-          return NextResponse.json({ error: '源不存在' }, { status: 404 });
-        entry.disabled = true;
-        break;
+      if (storage && typeof (storage as any).setAdminConfig === 'function') {
+        await (storage as any).setAdminConfig(adminConfig);
       }
-      case 'enable': {
-        const { key } = body as { key?: string };
-        if (!key)
-          return NextResponse.json({ error: '缺少 key 参数' }, { status: 400 });
-        const entry = adminConfig.SourceConfig.find((s) => s.key === key);
-        if (!entry)
-          return NextResponse.json({ error: '源不存在' }, { status: 404 });
-        entry.disabled = false;
-        break;
-      }
-      case 'delete': {
-        const { key } = body as { key?: string };
-        if (!key)
-          return NextResponse.json({ error: '缺少 key 参数' }, { status: 400 });
-        const idx = adminConfig.SourceConfig.findIndex((s) => s.key === key);
-        if (idx === -1)
-          return NextResponse.json({ error: '源不存在' }, { status: 404 });
-        const entry = adminConfig.SourceConfig[idx];
-        if (entry.from === 'config') {
-          return NextResponse.json({ error: '该源不可删除' }, { status: 400 });
-        }
-        adminConfig.SourceConfig.splice(idx, 1);
-        break;
-      }
-      case 'sort': {
-        const { order } = body as { order?: string[] };
-        if (!Array.isArray(order)) {
-          return NextResponse.json(
-            { error: '排序列表格式错误' },
-            { status: 400 }
-          );
-        }
-        const map = new Map(adminConfig.SourceConfig.map((s) => [s.key, s]));
-        const newList: typeof adminConfig.SourceConfig = [];
-        order.forEach((k) => {
-          const item = map.get(k);
-          if (item) {
-            newList.push(item);
-            map.delete(k);
-          }
-        });
-        // 未在 order 中的保持原顺序
-        adminConfig.SourceConfig.forEach((item) => {
-          if (map.has(item.key)) newList.push(item);
-        });
-        adminConfig.SourceConfig = newList;
-        break;
-      }
-      default:
-        return NextResponse.json({ error: '未知操作' }, { status: 400 });
+      invalidateConfigCache();
+      return NextResponse.json(
+        { ok: true, applied: ops.length - errors.length, errors },
+        { headers: { 'Cache-Control': 'no-store' } }
+      );
     }
 
-    // 持久化到存储
+    const action = body.action as Action | undefined;
+    if (!action || !ACTIONS.includes(action)) {
+      return NextResponse.json({ error: '参数格式错误' }, { status: 400 });
+    }
+    const err = applySourceOp(adminConfig, body as SourceOp);
+    if (err) {
+      const status = err === '源不存在' ? 404 : 400;
+      return NextResponse.json({ error: err }, { status });
+    }
+
     if (storage && typeof (storage as any).setAdminConfig === 'function') {
       await (storage as any).setAdminConfig(adminConfig);
     }
+    invalidateConfigCache();
 
-    return NextResponse.json(
-      { ok: true },
-      {
-        headers: {
-          'Cache-Control': 'no-store',
-        },
-      }
-    );
+    return NextResponse.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
+    invalidateConfigCache();
     console.error('视频源管理操作失败:', error);
     return NextResponse.json(
-      {
-        error: '视频源管理操作失败',
-        details: (error as Error).message,
-      },
+      { error: '视频源管理操作失败', details: (error as Error).message },
       { status: 500 }
     );
   }

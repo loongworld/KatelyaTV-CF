@@ -245,3 +245,136 @@ export async function getVideoResolutionFromM3u8(m3u8Url: string): Promise<{
     );
   }
 }
+
+/**
+ * 轻量 m3u8 探测：直接拉取播放列表（必要时进一层子列表），
+ * 从主列表读取分辨率、对首个分片做一次 Range 请求估算速度。
+ * 与 getVideoResolutionFromM3u8（依赖 hls.js + video 元素）相比，请求更少、耗时可控。
+ */
+export async function probeM3u8(
+  m3u8Url: string,
+  timeoutMs = 3000
+): Promise<{
+  quality: string;
+  loadSpeed: string;
+  pingTime: number;
+}> {
+  const deadline = performance.now() + timeoutMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const started = performance.now();
+  try {
+    const response = await fetch(m3u8Url, {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    const pingTime = performance.now() - started;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+
+    let maxWidth = 0;
+    let childPlaylist: string | null = null;
+    let firstSegment: string | null = null;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) {
+        if (line.startsWith('#EXT-X-STREAM-INF')) {
+          const m = line.match(/RESOLUTION=(\d+)x(\d+)/i);
+          if (m) maxWidth = Math.max(maxWidth, Number(m[1]));
+        }
+        continue;
+      }
+      if (!childPlaylist && line.endsWith('.m3u8')) {
+        childPlaylist = line;
+      } else if (!firstSegment && !line.endsWith('.m3u8')) {
+        firstSegment = line;
+      }
+    }
+
+    // 主列表：进一层取子列表里的第一个分片
+    if (childPlaylist && !firstSegment) {
+      const remaining = deadline - performance.now();
+      if (remaining > 0) {
+        const childController = new AbortController();
+        const childTimer = setTimeout(() => childController.abort(), remaining);
+        try {
+          const childUrl = new URL(childPlaylist, m3u8Url).toString();
+          const childResponse = await fetch(childUrl, {
+            signal: childController.signal,
+            cache: 'no-store',
+          });
+          if (childResponse.ok) {
+            const childText = await childResponse.text();
+            for (const raw of childText.split(/\r?\n/)) {
+              const line = raw.trim();
+              if (line && !line.startsWith('#')) {
+                firstSegment = line;
+                break;
+              }
+            }
+          }
+        } catch {
+          // 子列表拉取失败不影响返回
+        } finally {
+          clearTimeout(childTimer);
+        }
+      }
+    }
+
+    let loadSpeed = '未知';
+    if (firstSegment) {
+      const remaining = Math.min(deadline - performance.now(), timeoutMs);
+      if (remaining > 200) {
+        const segController = new AbortController();
+        const segTimer = setTimeout(() => segController.abort(), remaining);
+        const segStart = performance.now();
+        try {
+          const segmentUrl = new URL(firstSegment, m3u8Url).toString();
+          const segResponse = await fetch(segmentUrl, {
+            signal: segController.signal,
+            headers: { Range: 'bytes=0-262143' },
+            cache: 'no-store',
+          });
+          if (segResponse.ok || segResponse.status === 206) {
+            const buffer = await segResponse.arrayBuffer();
+            const elapsed = performance.now() - segStart;
+            if (elapsed > 0 && buffer.byteLength > 0) {
+              const speedKBps = buffer.byteLength / 1024 / (elapsed / 1000);
+              loadSpeed =
+                speedKBps >= 1024
+                  ? `${(speedKBps / 1024).toFixed(1)} MB/s`
+                  : `${speedKBps.toFixed(1)} KB/s`;
+            }
+          }
+        } catch {
+          // 测速失败不致命
+        } finally {
+          clearTimeout(segTimer);
+        }
+      }
+    }
+
+    const quality =
+      maxWidth >= 3840
+        ? '4K'
+        : maxWidth >= 2560
+        ? '2K'
+        : maxWidth >= 1920
+        ? '1080p'
+        : maxWidth >= 1280
+        ? '720p'
+        : maxWidth >= 854
+        ? '480p'
+        : maxWidth > 0
+        ? 'SD'
+        : '未知';
+
+    return { quality, loadSpeed, pingTime: Math.round(pingTime) };
+  } catch (error) {
+    throw new Error(
+      `probeM3u8 失败: ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}

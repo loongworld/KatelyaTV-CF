@@ -19,7 +19,7 @@ import {
   subscribeToDataUpdates,
 } from '@/lib/db.client';
 import { SearchResult } from '@/lib/types';
-import { getVideoResolutionFromM3u8, processImageUrl } from '@/lib/utils';
+import { probeM3u8, processImageUrl } from '@/lib/utils';
 
 import EpisodeSelector from '@/components/EpisodeSelector';
 import PageLayout from '@/components/PageLayout';
@@ -184,15 +184,22 @@ function PlayPageClient() {
   ): Promise<SearchResult> => {
     if (sources.length === 1) return sources[0];
 
-    // 将播放源均分为两批，并发测速各批，避免一次性过多请求
-    const batchSize = Math.ceil(sources.length / 2);
+    // 全局 3.2 秒预算 + 最多 6 路并发：到点即选用已完成的结果，避免长时间等待
+    const PROBE_BUDGET_MS = 3200;
+    const MAX_CONCURRENT = 6;
+    const deadline = Date.now() + PROBE_BUDGET_MS;
     const allResults: Array<{
       source: SearchResult;
       testResult: { quality: string; loadSpeed: string; pingTime: number };
-    } | null> = [];
+    } | null> = new Array(sources.length).fill(null);
 
-    for (let start = 0; start < sources.length; start += batchSize) {
-      const batchSources = sources.slice(start, start + batchSize);
+    for (let start = 0; start < sources.length; start += MAX_CONCURRENT) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        console.warn('优选测速超出时间预算，剩余播放源跳过探测');
+        break;
+      }
+      const batchSources = sources.slice(start, start + MAX_CONCURRENT);
       const batchResults = await Promise.all(
         batchSources.map(async (source) => {
           try {
@@ -206,7 +213,10 @@ function PlayPageClient() {
               source.episodes.length > 1
                 ? source.episodes[1]
                 : source.episodes[0];
-            const testResult = await getVideoResolutionFromM3u8(episodeUrl);
+            const testResult = await probeM3u8(
+              episodeUrl,
+              Math.min(remaining, 3000)
+            );
 
             return {
               source,
@@ -217,7 +227,9 @@ function PlayPageClient() {
           }
         })
       );
-      allResults.push(...batchResults);
+      batchResults.forEach((result, i) => {
+        allResults[start + i] = result;
+      });
     }
 
     // 等待所有测速完成，包含成功和失败的结果
@@ -624,10 +636,8 @@ function PlayPageClient() {
       setLoadingStage('ready');
       setLoadingMessage('✨ 准备就绪，即将开始播放...');
 
-      // 短暂延迟让用户看到完成状态
-      setTimeout(() => {
-        setLoading(false);
-      }, 1000);
+      // 立即进入播放界面，不再人为等待
+      setLoading(false);
     };
 
     initAll();

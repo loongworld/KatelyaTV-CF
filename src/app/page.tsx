@@ -125,36 +125,76 @@ function HomeClient() {
 
   const [favoriteItems, setFavoriteItems] = useState<FavoriteItem[]>([]);
 
+  // 豆瓣数据缓存（会话级 5 分钟），避免每次进入首页都重新请求
+  const DOUBAN_CACHE_KEY = 'douban_home_cache_v1';
+  const DOUBAN_CACHE_TTL = 5 * 60 * 1000;
+
   useEffect(() => {
     const fetchDoubanData = async () => {
+      // 命中缓存直接使用
+      try {
+        const raw =
+          typeof window !== 'undefined'
+            ? sessionStorage.getItem(DOUBAN_CACHE_KEY)
+            : null;
+        if (raw) {
+          const cached = JSON.parse(raw);
+          if (cached && Date.now() - cached.at < DOUBAN_CACHE_TTL) {
+            setHotMovies(cached.movies || []);
+            setHotTvShows(cached.tvShows || []);
+            setHotVarietyShows(cached.variety || []);
+            return;
+          }
+        }
+      } catch {
+        // 缓存解析失败不影响请求
+      }
+
       try {
         setLoading(true);
 
-        // 并行获取热门电影、热门剧集和热门综艺
-        const [moviesData, tvShowsData, varietyShowsData] = await Promise.all([
-          getDoubanCategories({
-            kind: 'movie',
-            category: '热门',
-            type: '全部',
-          }),
-          getDoubanCategories({ kind: 'tv', category: 'tv', type: 'tv' }),
-          getDoubanCategories({ kind: 'tv', category: 'show', type: 'show' }),
-        ]);
+        // 三个分类互不影响：任一失败不阻塞其它分类显示
+        const [moviesResult, tvResult, varietyResult] =
+          await Promise.allSettled([
+            getDoubanCategories({
+              kind: 'movie',
+              category: '热门',
+              type: '全部',
+            }),
+            getDoubanCategories({ kind: 'tv', category: 'tv', type: 'tv' }),
+            getDoubanCategories({ kind: 'tv', category: 'show', type: 'show' }),
+          ]);
 
-        if (moviesData.code === 200) {
-          setHotMovies(moviesData.list);
-        }
+        const movies =
+          moviesResult.status === 'fulfilled' && moviesResult.value.code === 200
+            ? moviesResult.value.list
+            : [];
+        const tvShows =
+          tvResult.status === 'fulfilled' && tvResult.value.code === 200
+            ? tvResult.value.list
+            : [];
+        const variety =
+          varietyResult.status === 'fulfilled' &&
+          varietyResult.value.code === 200
+            ? varietyResult.value.list
+            : [];
 
-        if (tvShowsData.code === 200) {
-          setHotTvShows(tvShowsData.list);
-        }
+        if (movies.length) setHotMovies(movies);
+        if (tvShows.length) setHotTvShows(tvShows);
+        if (variety.length) setHotVarietyShows(variety);
 
-        if (varietyShowsData.code === 200) {
-          setHotVarietyShows(varietyShowsData.list);
+        if (movies.length || tvShows.length || variety.length) {
+          try {
+            sessionStorage.setItem(
+              DOUBAN_CACHE_KEY,
+              JSON.stringify({ at: Date.now(), movies, tvShows, variety })
+            );
+          } catch {
+            // 存储不可用时忽略缓存
+          }
         }
       } catch (error) {
         // 静默处理错误，避免控制台警告
-        // console.error('获取豆瓣数据失败:', error);
       } finally {
         setLoading(false);
       }

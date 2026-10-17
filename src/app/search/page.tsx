@@ -5,7 +5,6 @@ import { ChevronUp, Search, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState } from 'react';
 
-import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 import {
   addSearchHistory,
   clearSearchHistory,
@@ -170,15 +169,6 @@ function SearchPageClient() {
     try {
       setIsLoading(true);
       
-      // 获取用户认证信息
-      const authInfo = getAuthInfoFromBrowserCookie();
-      
-      // 构建请求头
-      const headers: HeadersInit = {};
-      if (authInfo?.username) {
-        headers['Authorization'] = `Bearer ${authInfo.username}`;
-      }
-      
       // 简化的搜索请求 - 成人内容过滤现在在API层面自动处理
       // 添加时间戳参数避免缓存问题
       const timestamp = Date.now();
@@ -186,7 +176,6 @@ function SearchPageClient() {
         `/api/search?q=${encodeURIComponent(query.trim())}&t=${timestamp}`, 
         { 
           headers: {
-            ...headers,
             'Cache-Control': 'no-cache, no-store, must-revalidate'
           }
         }

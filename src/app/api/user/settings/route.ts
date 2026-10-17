@@ -1,48 +1,56 @@
-import { headers } from 'next/headers';
+/* eslint-disable no-console */
 import { NextRequest, NextResponse } from 'next/server';
 
+import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getStorage } from '@/lib/db';
 import { UserSettings } from '@/lib/types';
 
 // 设置运行时为 Edge Runtime，确保部署兼容性
 export const runtime = 'edge';
 
-// 获取用户设置
-export async function GET(_request: NextRequest) {
+const NO_STORE = {
+  'Cache-Control': 'no-cache, no-store, must-revalidate',
+  Pragma: 'no-cache',
+  Expires: '0',
+};
+
+const DEFAULT_SETTINGS: UserSettings = {
+  filter_adult_content: true,
+  theme: 'auto',
+  language: 'zh-CN',
+  auto_play: true,
+  video_quality: 'auto',
+};
+
+// 用户可自行修改的字段白名单（不包含管理员专属字段）
+const USER_EDITABLE = ['filter_adult_content', 'theme', 'language', 'auto_play', 'video_quality'] as const;
+
+function sanitize(input: Record<string, unknown>): Partial<UserSettings> {
+  const out: Record<string, unknown> = {};
+  for (const key of USER_EDITABLE) {
+    if (!(key in input)) continue;
+    const value = input[key];
+    if (key === 'filter_adult_content' || key === 'auto_play') {
+      if (typeof value === 'boolean') out[key] = value;
+    } else if (typeof value === 'string' && value.length <= 32) {
+      out[key] = value;
+    }
+  }
+  return out as Partial<UserSettings>;
+}
+
+// 获取用户设置（身份只来自签名 Cookie）
+export async function GET(request: NextRequest) {
   try {
-    const headersList = headers();
-    const authorization = headersList.get('Authorization');
-    
-    if (!authorization) {
+    const authInfo = await getAuthInfoFromCookie(request);
+    if (!authInfo) {
       return NextResponse.json({ error: '未授权访问' }, { status: 401 });
     }
 
-    const userName = authorization.split(' ')[1]; // 假设格式为 "Bearer username"
-    
-    if (!userName) {
-      return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
-    }
-
     const storage = getStorage();
-    const settings = await storage.getUserSettings(userName);
-    
-    return NextResponse.json({ 
-      settings: settings || {
-        filter_adult_content: true, // 默认开启成人内容过滤
-        theme: 'auto',
-        language: 'zh-CN',
-        auto_play: true,
-        video_quality: 'auto'
-      }
-    }, {
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
-      }
-    });
+    const settings = await storage.getUserSettings(authInfo.username);
+    return NextResponse.json({ settings: settings || DEFAULT_SETTINGS }, { headers: NO_STORE });
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error('Error getting user settings:', error);
     return NextResponse.json({ error: '获取用户设置失败' }, { status: 500 });
   }
@@ -51,96 +59,49 @@ export async function GET(_request: NextRequest) {
 // 更新用户设置
 export async function PATCH(request: NextRequest) {
   try {
-    const headersList = headers();
-    const authorization = headersList.get('Authorization');
-    
-    if (!authorization) {
+    const authInfo = await getAuthInfoFromCookie(request);
+    if (!authInfo) {
       return NextResponse.json({ error: '未授权访问' }, { status: 401 });
     }
 
-    const userName = authorization.split(' ')[1];
-    
-    if (!userName) {
-      return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
-    }
-
-    const body = await request.json();
-    const { settings } = body as { settings: Partial<UserSettings> };
-    
-    if (!settings) {
+    const body = (await request.json().catch(() => ({}))) as { settings?: Record<string, unknown> };
+    if (!body.settings || typeof body.settings !== 'object') {
       return NextResponse.json({ error: '设置数据不能为空' }, { status: 400 });
     }
 
     const storage = getStorage();
-    
-    // 验证用户存在
-    const userExists =
-      userName === (process.env.USERNAME || '') ||
-      (await storage.checkUserExist(userName));
-    if (!userExists) {
-      return NextResponse.json({ error: '用户不存在' }, { status: 404 });
+    const current = (await storage.getUserSettings(authInfo.username)) || DEFAULT_SETTINGS;
+    const patch = sanitize(body.settings);
+
+    // 管理员强制开启过滤或禁止用户自行关闭时，用户不能改成关闭
+    const locked = current.can_disable_filter === false || current.managed_by_admin === true;
+    if (locked && patch.filter_adult_content === false) {
+      return NextResponse.json({ error: '管理员已限制关闭成人内容过滤' }, { status: 403 });
     }
 
-    await storage.updateUserSettings(userName, settings);
-    
-    return NextResponse.json({ 
-      success: true,
-      message: '设置更新成功' 
-    }, {
-      headers: {
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
-      }
-    });
+    await storage.updateUserSettings(authInfo.username, patch);
+    return NextResponse.json(
+      { success: true, message: '设置更新成功' },
+      { headers: NO_STORE }
+    );
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error('Error updating user settings:', error);
     return NextResponse.json({ error: '更新用户设置失败' }, { status: 500 });
   }
 }
 
-// 重置用户设置
+// 重置用户设置为默认值
 export async function PUT(request: NextRequest) {
   try {
-    const headersList = headers();
-    const authorization = headersList.get('Authorization');
-    
-    if (!authorization) {
+    const authInfo = await getAuthInfoFromCookie(request);
+    if (!authInfo) {
       return NextResponse.json({ error: '未授权访问' }, { status: 401 });
     }
 
-    const userName = authorization.split(' ')[1];
-    
-    if (!userName) {
-      return NextResponse.json({ error: '用户名不能为空' }, { status: 400 });
-    }
-
-    const body = await request.json();
-    const { settings } = body as { settings: UserSettings };
-    
-    if (!settings) {
-      return NextResponse.json({ error: '设置数据不能为空' }, { status: 400 });
-    }
-
     const storage = getStorage();
-    
-    // 验证用户存在
-    const userExists =
-      userName === (process.env.USERNAME || '') ||
-      (await storage.checkUserExist(userName));
-    if (!userExists) {
-      return NextResponse.json({ error: '用户不存在' }, { status: 404 });
-    }
-
-    await storage.setUserSettings(userName, settings);
-    
-    return NextResponse.json({ 
-      success: true,
-      message: '设置已重置' 
-    });
+    await storage.setUserSettings(authInfo.username, DEFAULT_SETTINGS);
+    return NextResponse.json({ success: true, message: '设置已重置' });
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error('Error resetting user settings:', error);
     return NextResponse.json({ error: '重置用户设置失败' }, { status: 500 });
   }

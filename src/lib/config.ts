@@ -223,7 +223,25 @@ async function initConfig() {
   }
 }
 
+// 站点配置在单个 isolate 内短时缓存，避免每个请求（搜索会按源多次调用）都回读整份 D1 JSON
+const CONFIG_TTL_MS = 15_000;
+let configCache: { value: AdminConfig; at: number } | null = null;
+
+/** 写入站点配置后调用，使本实例的后续读取立即看到最新内容 */
+export function invalidateConfigCache(): void {
+  configCache = null;
+}
+
 export async function getConfig(): Promise<AdminConfig> {
+  if (configCache && Date.now() - configCache.at < CONFIG_TTL_MS) {
+    return configCache.value;
+  }
+  const value = await loadConfig();
+  configCache = { value, at: Date.now() };
+  return value;
+}
+
+async function loadConfig(): Promise<AdminConfig> {
   const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
   
   if (process.env.DOCKER_ENV === 'true' || storageType === 'localstorage') {
@@ -397,6 +415,7 @@ export async function resetConfig() {
   cachedConfig.SiteConfig = adminConfig.SiteConfig;
   cachedConfig.UserConfig = adminConfig.UserConfig;
   cachedConfig.SourceConfig = adminConfig.SourceConfig;
+  invalidateConfigCache();
 }
 
 export async function getCacheTime(): Promise<number> {

@@ -4,17 +4,32 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { db } from '@/lib/db';
 import { fetchVideoDetail } from '@/lib/fetchVideoDetail';
+import { timingSafeEqualString } from '@/lib/secure';
 import { SearchResult } from '@/lib/types';
 
 export const runtime = 'edge';
 
-export async function GET(request: NextRequest) {
-  console.log(request.url);
+/**
+ * 定时刷新播放记录/收藏的接口。
+ * 仅接受 POST + Bearer CRON_SECRET；未配置 CRON_SECRET 时直接 503（fail closed）。
+ */
+export async function POST(request: NextRequest) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) {
+    return NextResponse.json(
+      { success: false, message: '未配置 CRON_SECRET，接口已禁用' },
+      { status: 503 }
+    );
+  }
+  const auth = request.headers.get('authorization') || '';
+  const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  if (!provided || !timingSafeEqualString(provided, secret)) {
+    return NextResponse.json({ success: false, message: 'Unauthorized' }, { status: 401 });
+  }
+
   try {
     console.log('Cron job triggered:', new Date().toISOString());
-
-    refreshRecordAndFavorites();
-
+    await refreshRecordAndFavorites();
     return NextResponse.json({
       success: true,
       message: 'Cron job executed successfully',
@@ -22,7 +37,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('Cron job failed:', error);
-
     return NextResponse.json(
       {
         success: false,
@@ -35,10 +49,15 @@ export async function GET(request: NextRequest) {
   }
 }
 
+export async function GET() {
+  return NextResponse.json(
+    { success: false, message: 'Method Not Allowed，请使用 POST' },
+    { status: 405, headers: { Allow: 'POST' } }
+  );
+}
+
 async function refreshRecordAndFavorites() {
-  if (
-    (process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage') === 'localstorage'
-  ) {
+  if ((process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage') === 'localstorage') {
     console.log('跳过刷新：当前使用 localstorage 存储模式');
     return;
   }
@@ -51,7 +70,6 @@ async function refreshRecordAndFavorites() {
     // 函数级缓存：key 为 `${source}+${id}`，值为 Promise<VideoDetail | null>
     const detailCache = new Map<string, Promise<SearchResult | null>>();
 
-    // 获取详情 Promise（带缓存和错误处理）
     const getDetail = async (
       source: string,
       id: string,
@@ -66,7 +84,6 @@ async function refreshRecordAndFavorites() {
           fallbackTitle: fallbackTitle.trim(),
         })
           .then((detail) => {
-            // 成功时才缓存结果
             const successPromise = Promise.resolve(detail);
             detailCache.set(key, successPromise);
             return detail;
@@ -124,7 +141,6 @@ async function refreshRecordAndFavorites() {
             processedRecords++;
           } catch (err) {
             console.error(`处理播放记录失败 (${key}):`, err);
-            // 继续处理下一个记录
           }
         }
 
@@ -164,15 +180,12 @@ async function refreshRecordAndFavorites() {
                 save_time: fav.save_time,
                 search_title: fav.search_title,
               });
-              console.log(
-                `更新收藏: ${fav.title} (${fav.total_episodes} -> ${favEpisodeCount})`
-              );
+              console.log(`更新收藏: ${fav.title} (${fav.total_episodes} -> ${favEpisodeCount})`);
             }
 
             processedFavorites++;
           } catch (err) {
             console.error(`处理收藏失败 (${key}):`, err);
-            // 继续处理下一个收藏
           }
         }
 

@@ -3,34 +3,7 @@
 
 import { useEffect, useState } from 'react';
 
-// 临时内联认证函数，避免导入问题
-function getAuthInfoFromBrowserCookie(): {
-  password?: string;
-  username?: string;
-  signature?: string;
-  timestamp?: number;
-} | null {
-  if (typeof window === 'undefined') {
-    return null;
-  }
-
-  const cookies = document.cookie.split(';');
-  const authCookie = cookies.find(cookie => cookie.trim().startsWith('auth='));
-  
-  if (!authCookie) {
-    return null;
-  }
-
-  try {
-    const cookieValue = authCookie.split('=')[1];
-    const decoded = decodeURIComponent(cookieValue);
-    const authData = JSON.parse(decoded);
-    return authData;
-  } catch (error) {
-    console.error('Failed to parse auth cookie:', error);
-    return null;
-  }
-}
+import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
 
 interface UserInfo {
   username: string;
@@ -69,7 +42,6 @@ export default function UserManagement() {
 
       const response = await fetch('/api/admin/users', {
         headers: {
-          'Authorization': `Bearer ${encodeURIComponent(authInfo.username)}`,
           'Cache-Control': 'no-cache'
         }
       });
@@ -99,8 +71,7 @@ export default function UserManagement() {
       const response = await fetch('/api/admin/users', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${encodeURIComponent(authInfo.username)}`
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           action,

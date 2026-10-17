@@ -15,7 +15,7 @@ const MobileHeader = ({ showBackButton = false }: MobileHeaderProps) => {
   const { siteName } = useSite();
   return (
     <header className='md:hidden relative w-full bg-white/70 backdrop-blur-xl border-b border-purple-200/50 shadow-sm dark:bg-gray-900/70 dark:border-purple-700/50'>
-      <div className='h-12 flex items-center justify-between px-4'>
+      <div className='h-14 flex items-center justify-between px-3'>
         {/* 左侧：返回按钮和设置按钮 */}
         <div className='flex items-center gap-2'>
           {showBackButton && <BackButton />}

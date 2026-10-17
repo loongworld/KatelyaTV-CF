@@ -538,3 +538,24 @@ img {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ===== 移动端 / 折叠屏基础适配 ===== */
+html {
+  min-height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  /* 动态视口高度：地址栏收起/展开时内容不跳动 */
+  min-height: 100dvh;
+  overscroll-behavior-y: none;
+}
+
+/* 触屏设备去掉系统点击高亮方块，保留组件自身的按压反馈 */
+@media (hover: none) {
+  a,
+  button,
+  [role='button'] {
+    -webkit-tap-highlight-color: transparent;
+  }
+}

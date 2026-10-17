@@ -1,6 +1,7 @@
 /* eslint-disable no-console, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion */
 
 import { AdminConfig } from './admin.types';
+import { hashPassword, isHashedPassword, verifyPassword } from './password';
 import { EpisodeSkipConfig, Favorite, IStorage, PlayRecord, User, UserSettings } from './types';
 
 // 搜索历史最大条数
@@ -38,7 +39,7 @@ interface D1ExecResult {
 }
 
 // 获取全局D1数据库实例
-function getD1Database(): D1Database {
+export function getD1Database(): D1Database {
   // 在 Cloudflare Pages 环境中，DB 通过全局绑定可用
   if (typeof globalThis !== 'undefined') {
     // 尝试直接访问全局 DB
@@ -289,9 +290,10 @@ export class D1Storage implements IStorage {
   async registerUser(userName: string, password: string): Promise<void> {
     try {
       const db = await this.getDatabase();
+      const hashed = await hashPassword(password);
       await db
         .prepare('INSERT INTO users (username, password) VALUES (?, ?)')
-        .bind(userName, password)
+        .bind(userName, hashed)
         .run();
     } catch (err) {
       console.error('Failed to register user:', err);
@@ -306,8 +308,17 @@ export class D1Storage implements IStorage {
         .prepare('SELECT password FROM users WHERE username = ?')
         .bind(userName)
         .first<{ password: string }>();
+      if (!result?.password) return false;
 
-      return result?.password === password;
+      const ok = await verifyPassword(password, result.password);
+      // 存量明文账号在首次成功登录时无感升级为哈希
+      if (ok && !isHashedPassword(result.password)) {
+        await db
+          .prepare('UPDATE users SET password = ? WHERE username = ?')
+          .bind(await hashPassword(password), userName)
+          .run();
+      }
+      return ok;
     } catch (err) {
       console.error('Failed to verify user:', err);
       throw err;
@@ -334,7 +345,7 @@ export class D1Storage implements IStorage {
       const db = await this.getDatabase();
       await db
         .prepare('UPDATE users SET password = ? WHERE username = ?')
-        .bind(newPassword, userName)
+        .bind(await hashPassword(newPassword), userName)
         .run();
     } catch (err) {
       console.error('Failed to change password:', err);
