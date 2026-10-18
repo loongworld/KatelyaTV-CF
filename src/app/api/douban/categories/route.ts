@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 
 import { getCacheTime } from '@/lib/config';
-import { fetchDoubanWithRetry, getDefaultCache } from '@/lib/doubanHttp';
+import { fetchDouban, getDefaultCache } from '@/lib/doubanHttp';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 interface DoubanCategoryApiResponse {
@@ -24,7 +24,7 @@ interface DoubanCategoryApiResponse {
 async function fetchDoubanData(
   url: string
 ): Promise<DoubanCategoryApiResponse> {
-  const response = await fetchDoubanWithRetry(url);
+  const response = await fetchDouban(url);
 
   if (!response.ok) {
     throw new Error(`HTTP error! Status: ${response.status}`);

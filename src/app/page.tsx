@@ -125,31 +125,8 @@ function HomeClient() {
 
   const [favoriteItems, setFavoriteItems] = useState<FavoriteItem[]>([]);
 
-  // 豆瓣数据缓存（会话级 5 分钟），避免每次进入首页都重新请求
-  const DOUBAN_CACHE_KEY = 'douban_home_cache_v1';
-  const DOUBAN_CACHE_TTL = 5 * 60 * 1000;
-
   useEffect(() => {
     const fetchDoubanData = async () => {
-      // 命中缓存直接使用
-      try {
-        const raw =
-          typeof window !== 'undefined'
-            ? sessionStorage.getItem(DOUBAN_CACHE_KEY)
-            : null;
-        if (raw) {
-          const cached = JSON.parse(raw);
-          if (cached && Date.now() - cached.at < DOUBAN_CACHE_TTL) {
-            setHotMovies(cached.movies || []);
-            setHotTvShows(cached.tvShows || []);
-            setHotVarietyShows(cached.variety || []);
-            return;
-          }
-        }
-      } catch {
-        // 缓存解析失败不影响请求
-      }
-
       try {
         setLoading(true);
 
@@ -182,17 +159,6 @@ function HomeClient() {
         if (movies.length) setHotMovies(movies);
         if (tvShows.length) setHotTvShows(tvShows);
         if (variety.length) setHotVarietyShows(variety);
-
-        if (movies.length || tvShows.length || variety.length) {
-          try {
-            sessionStorage.setItem(
-              DOUBAN_CACHE_KEY,
-              JSON.stringify({ at: Date.now(), movies, tvShows, variety })
-            );
-          } catch {
-            // 存储不可用时忽略缓存
-          }
-        }
       } catch (error) {
         // 静默处理错误，避免控制台警告
       } finally {

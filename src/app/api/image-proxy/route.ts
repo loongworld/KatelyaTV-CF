@@ -156,26 +156,14 @@ export async function GET(request: Request) {
   const referer = upstreamReferer(target.hostname);
   if (referer) upstreamHeaders.Referer = referer;
 
-  let controller = new AbortController();
-  let timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    let imageResponse = await fetch(target.toString(), {
+    const imageResponse = await fetch(target.toString(), {
       signal: controller.signal,
       redirect: 'follow',
       headers: upstreamHeaders,
     });
-
-    // 上游 5xx（含 CF 530 这类瞬态错误，图床偶发）重试一次再放弃
-    if (imageResponse.status >= 500) {
-      clearTimeout(timer);
-      controller = new AbortController();
-      timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-      imageResponse = await fetch(target.toString(), {
-        signal: controller.signal,
-        redirect: 'follow',
-        headers: upstreamHeaders,
-      });
-    }
 
     // 跟随重定向后再次校验最终地址，防止跳转到内网
     if (!validateTarget(imageResponse.url)) {

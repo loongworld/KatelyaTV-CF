@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server';
 
 import { getCacheTime } from '@/lib/config';
-import { fetchDoubanWithRetry } from '@/lib/doubanHttp';
+import { fetchDouban } from '@/lib/doubanHttp';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 interface DoubanApiResponse {
@@ -15,7 +15,7 @@ interface DoubanApiResponse {
 }
 
 async function fetchDoubanData(url: string): Promise<DoubanApiResponse> {
-  const response = await fetchDoubanWithRetry(url);
+  const response = await fetchDouban(url);
 
   if (!response.ok) {
     throw new Error(`HTTP error! Status: ${response.status}`);
@@ -116,7 +116,7 @@ export async function GET(request: Request) {
 function handleTop250(pageStart: number) {
   const target = `https://movie.douban.com/top250?start=${pageStart}&filter=`;
 
-  return fetchDoubanWithRetry(
+  return fetchDouban(
     target,
     'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
   )
