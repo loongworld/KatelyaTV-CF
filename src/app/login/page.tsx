@@ -34,11 +34,11 @@ function VersionDisplay() {
     <button
       onClick={() =>
         window.open(
-          process.env.NEXT_PUBLIC_REPO_URL || 'https://github.com/katelya77/KatelyaTV',
+          process.env.NEXT_PUBLIC_REPO_URL || 'https://github.com/wooxi/KatelyaTV-CF',
           '_blank'
         )
       }
-      className='absolute bottom-4 left-1/2 transform -translate-x-1/2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 transition-colors cursor-pointer'
+      className='absolute left-1/2 bottom-[max(1rem,env(safe-area-inset-bottom))] transform -translate-x-1/2 flex items-center gap-2 px-3 py-2 -mx-3 -mb-2 text-xs text-gray-500 dark:text-gray-400 transition-colors cursor-pointer'
     >
       <span className='font-mono'>v{CURRENT_VERSION}</span>
       {!isChecking && updateStatus !== UpdateStatus.FETCH_FAILED && (

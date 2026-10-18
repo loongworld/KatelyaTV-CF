@@ -24,10 +24,9 @@ const PUBLIC_EXACT = new Set([
   '/favicon.ico',
   '/robots.txt',
   '/manifest.json',
-  '/sw.js',
 ]);
 
-const PUBLIC_PREFIX = ['/_next/', '/icons/', '/workbox-', '/swe-worker', '/fallback'];
+const PUBLIC_PREFIX = ['/_next/', '/icons/'];
 
 /**
  * public/ 下的静态资源按扩展名放行，避免每新增一个文件就要回来改白名单

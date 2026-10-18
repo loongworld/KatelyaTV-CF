@@ -13,6 +13,11 @@ export type Role = 'owner' | 'admin' | 'user';
 export interface Session {
   username: string;
   role: Role;
+  /**
+   * 会话版本号（脱库校验用）。签发时从 users 表读取；服务端比对不一致即视为已吊销。
+   * 不做全站逐请求校验，只在 API 鉴权层（lib/auth）做带缓存的比对，见 lib/sessionVersion.ts。
+   */
+  sv?: number;
 }
 
 const encoder = new TextEncoder();
@@ -55,6 +60,7 @@ export async function createSessionValue(session: Session): Promise<string | nul
     v: TOKEN_VERSION,
     u: session.username,
     r: session.role,
+    sv: session.sv ?? 0,
     iat: now,
     exp: now + SESSION_TTL_SECONDS,
   };
@@ -84,7 +90,10 @@ export async function verifySessionValue(value: string): Promise<Session | null>
   if (typeof payload.u !== 'string' || typeof payload.exp !== 'number') return null;
   if (payload.exp * 1000 < Date.now()) return null;
   const role: Role = payload.r === 'owner' || payload.r === 'admin' ? payload.r : 'user';
-  return { username: payload.u, role };
+  // 早期令牌没有 sv 字段，按 0 处理：只要用户从未触发过吊销（版本仍为 0）就继续有效
+  const sv =
+    typeof payload.sv === 'number' && Number.isFinite(payload.sv) ? payload.sv : 0;
+  return { username: payload.u, role, sv };
 }
 
 export function readCookie(request: Request, name: string): string | null {
@@ -123,8 +132,15 @@ export function encodeUserInfo(session: Session): string {
   return encodeURIComponent(JSON.stringify({ username: session.username, role: session.role }));
 }
 
-/** TVBox 订阅令牌：由会话密钥派生，轮换 SESSION_SECRET / AUTH_PASSWORD 即失效 */
+/**
+ * TVBox 订阅令牌。
+ * 优先使用独立的 TVBOX_TOKEN 环境变量（≥16 字符），它不参与会话签名，
+ * 因此可以单独轮换而不影响任何登录会话；
+ * 未配置时退回由会话密钥派生（轮换 SESSION_SECRET / AUTH_PASSWORD 即失效）。
+ */
 export async function getTvboxToken(): Promise<string | null> {
+  const explicit = process.env.TVBOX_TOKEN;
+  if (explicit && explicit.length >= 16) return explicit;
   const key = await getHmacKey();
   if (!key) return null;
   const mac = await crypto.subtle.sign('HMAC', key, encoder.encode('tvbox-token:v1'));

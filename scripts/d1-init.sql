@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
   password TEXT NOT NULL,              -- PBKDF2-SHA256 哈希串，见 src/lib/password.ts
+  session_version INTEGER NOT NULL DEFAULT 0,  -- 会话版本：封禁/改密/角色变更时 +1，旧令牌即失效
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -112,3 +113,6 @@ CREATE TABLE IF NOT EXISTS login_attempts (
 --   DROP TABLE IF EXISTS search_history;
 --   DROP TABLE IF EXISTS skip_configs;
 -- 然后重新执行本脚本。
+
+-- 已有的库升级到 1.3.0（会话吊销机制）——只加一列，数据保留：
+--   ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0;

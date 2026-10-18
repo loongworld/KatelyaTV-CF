@@ -169,16 +169,11 @@ function SearchPageClient() {
     try {
       setIsLoading(true);
       
-      // 简化的搜索请求 - 成人内容过滤现在在API层面自动处理
-      // 添加时间戳参数避免缓存问题
-      // 时间戳参数会让浏览器每次都重新请求，而服务端缓存键里并不含它，已移除
+      // 简化的搜索请求 - 成人内容过滤现在在API层面自动处理。
+      // 不携带 Cache-Control 头：服务端返回 max-age=60，浏览器本地缓存即可，
+      // 靠 no-cache 强制穿透只会白烧边缘请求数。
       const response = await fetch(
-        `/api/search?q=${encodeURIComponent(query.trim())}&include_adult=true&offset=0`, 
-        { 
-          headers: {
-            'Cache-Control': 'no-cache'
-          }
-        }
+        `/api/search?q=${encodeURIComponent(query.trim())}&include_adult=true&offset=0`
       );
       const data = await response.json();
       
@@ -460,7 +455,7 @@ function SearchPageClient() {
                         e.preventDefault();
                         deleteSearchHistory(item); // 事件监听会自动更新界面
                       }}
-                      className='absolute -top-1 -right-1 w-4 h-4 opacity-0 group-hover:opacity-100 bg-gray-400 hover:bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] transition-colors'
+                      className='absolute -top-1.5 -right-1.5 w-5 h-5 opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 bg-gray-400 hover:bg-red-500 text-white rounded-full flex items-center justify-center transition-colors'
                     >
                       <X className='w-3 h-3' />
                     </button>

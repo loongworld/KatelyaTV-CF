@@ -1,6 +1,6 @@
 {
   "name": "katelyatv",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
   "scripts": {
     "dev": "npm run gen:runtime && npm run gen:manifest && next dev -H 0.0.0.0",
@@ -19,7 +19,7 @@
     "gen:version": "node scripts/generate-version.js",
     "postbuild": "echo 'Build completed - sitemap generation disabled'",
     "prepare": "husky install",
-    "pages:build": "pnpm gen:runtime && pnpm gen:manifest && next build && npx @cloudflare/next-on-pages --experimental-minify && node scripts/fix-worker-imports.js"
+    "pages:build": "pnpm gen:runtime && pnpm gen:manifest && next build && npx @cloudflare/next-on-pages && node scripts/fix-worker-imports.js"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -45,7 +45,7 @@
     "@testing-library/react": "^15.0.7",
     "@types/node": "24.0.3",
     "@types/react": "^18.3.18",
-    "@types/react-dom": "^19.1.6",
+    "@types/react-dom": "^18.3.5",
     "@types/testing-library__jest-dom": "^5.14.9",
     "@typescript-eslint/eslint-plugin": "^5.62.0",
     "@typescript-eslint/parser": "^5.62.0",

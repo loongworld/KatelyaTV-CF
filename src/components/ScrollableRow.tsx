@@ -56,7 +56,8 @@ export default function ScrollableRow({
   // 添加一个额外的效果来监听子组件的变化
   useEffect(() => {
     if (containerRef.current) {
-      // 监听 DOM 变化
+      // 只监听子节点增删，不监听 class/style 属性变化——
+      // 卡片 hover、收藏态等高频属性变动会持续触发无效的 checkScroll
       const observer = new MutationObserver(() => {
         setTimeout(checkScroll, 100);
       });
@@ -64,8 +65,6 @@ export default function ScrollableRow({
       observer.observe(containerRef.current, {
         childList: true,
         subtree: true,
-        attributes: true,
-        attributeFilter: ['style', 'class'],
       });
 
       return () => observer.disconnect();

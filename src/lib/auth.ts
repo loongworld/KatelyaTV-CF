@@ -1,13 +1,22 @@
 import { getSessionFromRequest, USER_COOKIE } from './session';
+import { isSessionVersionValid } from './sessionVersion';
 
 /**
  * 服务端：从签名 Cookie 取得当前用户。未登录或签名无效返回 null。
  * 所有需要身份的接口都只能通过它获取用户名，不得读取请求体或请求头里的用户名。
+ * 对注册用户（非站长）额外校验会话版本：被封禁 / 改密 / 角色变更后，
+ * 旧会话最多 30 秒内失效（见 lib/sessionVersion.ts）。
  */
 export async function getAuthInfoFromCookie(
   request: Request
 ): Promise<{ username: string; role: 'owner' | 'admin' | 'user' } | null> {
-  return getSessionFromRequest(request);
+  const session = await getSessionFromRequest(request);
+  if (!session) return null;
+  if (session.role !== 'owner') {
+    const valid = await isSessionVersionValid(session.username, session.sv);
+    if (!valid) return null;
+  }
+  return session;
 }
 
 /**

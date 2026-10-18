@@ -13,6 +13,9 @@ import React, {
 import { SearchResult } from '@/lib/types';
 import { probeM3u8, processImageUrl } from '@/lib/utils';
 
+/** 换源测速的最大并发数：一次性全量探测会打出几十个请求，既慢又容易被上游限流 */
+const PROBE_CONCURRENCY = 4;
+
 // 定义视频信息类型
 interface VideoInfo {
   quality: string;
@@ -153,16 +156,29 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
     }
   }, [precomputedVideoInfo]);
 
-  // 当换源Tab激活且没有测速过时，开始测速
+  // 当换源Tab激活且没有测速过时，开始测速。
+  // 用小型 worker 池限制并发（此前全量 forEach 会瞬时打出几十个请求，
+  // 既拖慢彼此也让上游误判为滥用）。
   useEffect(() => {
-    if (activeTab === 'sources') {
-      availableSources.forEach((source) => {
-        const sourceKey = `${source.source}-${source.id}`;
-        if (!attemptedSourcesRef.current.has(sourceKey)) {
-          getVideoInfo(source);
+    if (activeTab !== 'sources') return;
+    let cancelled = false;
+    const queue = availableSources.filter(
+      (source) => !attemptedSourcesRef.current.has(`${source.source}-${source.id}`)
+    );
+    const workers = Array.from(
+      { length: Math.min(PROBE_CONCURRENCY, queue.length) },
+      async () => {
+        while (!cancelled) {
+          const next = queue.shift();
+          if (!next) break;
+          await getVideoInfo(next);
         }
-      });
-    }
+      }
+    );
+    void Promise.all(workers);
+    return () => {
+      cancelled = true;
+    };
   }, [activeTab, availableSources, getVideoInfo]);
 
   // 分类标签容器和按钮的引用
@@ -320,8 +336,8 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
             </button>
           </div>
 
-          {/* 集数网格 - 优化为10行×5列布局 */}
-          <div className='grid grid-cols-5 gap-3 pb-6 px-2'>
+          {/* 集数网格 - 10行×5列布局，超高时可滚动（此前溢出被父级 overflow-hidden 裁掉） */}
+          <div className='grid grid-cols-5 gap-3 pb-6 px-2 overflow-y-auto flex-1 min-h-0 content-start'>
             {(() => {
               const len = currentEnd - currentStart + 1;
               const episodes = Array.from({ length: len }, (_, i) =>
@@ -394,7 +410,7 @@ const EpisodeSelector: React.FC<EpisodeSelectorProps> = ({
             !sourceSearchError &&
             availableSources.length > 0 && (
               <div className='flex-1 overflow-y-auto space-y-2 pb-20'>
-                {availableSources
+                {[...availableSources]
                   .sort((a, b) => {
                     const aIsCurrent =
                       a.source?.toString() === currentSource?.toString() &&

@@ -2,6 +2,48 @@
 
 本仓库自 katelya77/KatelyaTV 分叉后针对 Cloudflare 部署链路完全重构。以下仅记录本仓库自身的变更。
 
+## [1.3.0] - 2026-10-18
+
+### 新增
+
+- **会话吊销机制（`session_version`）**：封禁 / 改密 / 角色变更后，该用户名下的旧会话最多 30 秒内全部失效。
+  此前被封禁的用户在凭据自然到期（7 天）前仍可继续使用站点。鉴权层对版本号做 30 秒内存缓存，
+  每次 API 调用最多摊薄为 30 秒一次 D1 点查；D1 异常时 fail-open（不误伤全站），用户被删除时立即拒绝。
+  已有库需执行一次迁移（未迁移自动降级，不报错）：
+  `ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0;`
+- **`TVBOX_TOKEN` 独立订阅令牌**：TVBox 订阅可与登录会话解耦，单独轮换吊销，不再必须轮换全站签名密钥。
+
+### 修复
+
+- **豆瓣海报全部回退占位图**：根因是 Referer 策略搞反了——此前注释断言「豆瓣对带 `movie.douban.com`
+  Referer 返回 403，因此不发送 Referer」，实测恰好相反：不带 Referer 时豆瓣返回 418 + 13 字节
+  `cdn error 001`（Content-Type 谎报 `image/jpeg`，被魔数校验拦成 502）；带上 Referer 则是正常的真图。
+  现在仅对豆瓣域（`*.doubanio.com` / `*.douban.com`）发送 `Referer: https://movie.douban.com/`，
+  其他图源维持不发送。
+- **选集面板溢出裁切**：`lg` 视口下集数网格（10 行 × 5 列，约 532px）超出固定高度容器且没有滚动，
+  第 39 集之后被 `overflow-hidden` 直接裁掉、无法点击。网格改为 `flex-1 min-h-0 overflow-y-auto`。
+- **换源测速风暴**：切到「换源」Tab 会瞬时对全部源并发探测。改为 4 并发 worker 池，逐个取队探测。
+- **换源列表原地排序**：`availableSources.sort()` 直接修改父组件 props，改为拷贝后排序。
+- **ScrollableRow 抖动**：`MutationObserver` 监听了 `class` / `style` 属性变化，鼠标划过卡片
+  （hover 态切换 class）即持续触发无效的滚动检查。改为只监听子节点增删。
+- **搜索请求强制穿透浏览器缓存**：上一版移除了时间戳参数，但残留的 `Cache-Control: no-cache`
+  请求头仍使浏览器每次都发起网络请求。移除，信任服务端 `max-age`。
+- **登录页版本按钮**：默认跳转地址仍是上游仓库（现改为本仓库，可用 `NEXT_PUBLIC_REPO_URL` 覆盖）；
+  按钮被 iPhone 底部手势条遮挡（补 `env(safe-area-inset-bottom)`）；扩大点击热区。
+- **触控目标偏小**：搜索历史删除按钮 16×16 → 20×20 且触屏设备常显；
+  `CapsuleSwitch` 移动端纵向内边距加大。
+
+### 变更
+
+- `wrangler.toml` 清理 10 个零引用的历史变量（`CACHE_TTL` / `CORS_ORIGIN` / `RATE_LIMIT_*` /
+  `HEALTH_CHECK_*` / `LOG_*` / `NEXT_PUBLIC_SITE_DESCRIPTION` / `NEXTAUTH_URL`）。
+- 修正文档与代码的变量名漂移：站点名回退值实际读 `SITE_NAME`，此前文档一直教用户配置无人读取的
+  `NEXT_PUBLIC_SITE_NAME`。
+- `[env.preview]` 的 D1 绑定修正为实际存在的 `katelyatv-db-preview`（此前指向生产库，与 Dashboard 脱节）。
+- `middleware.ts` 清理已随 PWA 一并删除的 `sw.js` / `workbox-*` / `swe-worker` 等白名单残留。
+- `@types/react-dom` 由 19.x 修正为与 React 18 匹配的 18.x。
+- README 全面重写；`docs/TVBOX.md` 按真实实现重写（格式参数、令牌机制、缓存时长等此前多处漂移）。
+
 ## [1.2.0] - 2026-10-18
 
 本版本来自一次完整审计（安全 / 前端 / Cloudflare 平台 / 线上实测四条线）。

@@ -123,6 +123,25 @@ function validateTarget(raw: string): URL | null {
   return url;
 }
 
+/**
+ * 豆瓣图床（img*.doubanio.com / *.douban.com）会校验 Referer：
+ * 缺失 Referer 时返回 418 + 13 字节文本「cdn error 001」（Content-Type 还谎报 image/jpeg），
+ * 带上 movie.douban.com 的 Referer 即可正常取图（2026-10 实测，本机与 CF 出口行为一致）。
+ * 其他图源保持不发送 Referer——部分图床对陌生 Referer 反而更严格。
+ */
+function upstreamReferer(hostname: string): string | null {
+  const host = hostname.toLowerCase();
+  if (
+    host === 'douban.com' ||
+    host.endsWith('.douban.com') ||
+    host === 'doubanio.com' ||
+    host.endsWith('.doubanio.com')
+  ) {
+    return 'https://movie.douban.com/';
+  }
+  return null;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const imageUrl = searchParams.get('url');
@@ -141,16 +160,18 @@ export async function GET(request: Request) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
+    const upstreamHeaders: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+      Accept: 'image/avif,image/webp,image/*,*/*;q=0.8',
+    };
+    const referer = upstreamReferer(target.hostname);
+    if (referer) upstreamHeaders.Referer = referer;
+
     const imageResponse = await fetch(target.toString(), {
       signal: controller.signal,
       redirect: 'follow',
-      headers: {
-        // 注意：豆瓣图床对带 movie.douban.com Referer 的请求返回 403，
-        // 因此这里刻意不设置 Referer。
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        Accept: 'image/avif,image/webp,image/*,*/*;q=0.8',
-      },
+      headers: upstreamHeaders,
     });
 
     // 跟随重定向后再次校验最终地址，防止跳转到内网
@@ -163,7 +184,7 @@ export async function GET(request: Request) {
     const rawContentType = imageResponse.headers.get('content-type') || '';
     const contentType = rawContentType.split(';')[0].trim().toLowerCase();
 
-    // 豆瓣图床对无 Referer 请求会返回 418 但 body 仍是图片，按成功处理
+    // 豆瓣偶发 418（风控响应），body 是否为真图片交给下方魔数校验兜底
     const okStatus = imageResponse.ok || imageResponse.status === 418;
 
     if (!okStatus) {

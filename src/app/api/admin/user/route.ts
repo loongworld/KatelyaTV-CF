@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthInfoFromCookie } from '@/lib/auth';
 import { getConfig, invalidateConfigCache } from '@/lib/config';
 import { getStorage } from '@/lib/db';
+import { bumpSessionVersion } from '@/lib/sessionVersion';
 import { IStorage } from '@/lib/types';
 
 export const runtime = 'edge';
@@ -160,6 +161,8 @@ export async function POST(request: NextRequest) {
             }
           }
           targetEntry.banned = true;
+          // 吊销已签发的会话：否则被封禁用户在凭据到期前仍可继续使用站点
+          await bumpSessionVersion(targetUsername!);
           break;
         }
         case 'unban': {
@@ -200,6 +203,8 @@ export async function POST(request: NextRequest) {
             );
           }
           targetEntry.role = 'admin';
+          // 角色变化后强制重新登录，让新会话携带正确角色
+          await bumpSessionVersion(targetUsername!);
           break;
         }
         case 'cancelAdmin': {
@@ -222,6 +227,8 @@ export async function POST(request: NextRequest) {
             );
           }
           targetEntry.role = 'user';
+          // 角色变化后强制重新登录，让新会话携带正确角色
+          await bumpSessionVersion(targetUsername!);
           break;
         }
         case 'changePassword': {

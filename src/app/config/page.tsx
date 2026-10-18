@@ -99,7 +99,7 @@ export default function ConfigPage() {
             <p className="mt-3 text-sm text-red-500">{error}</p>
           )}
           <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-            订阅地址包含访问令牌，仅站长可见；请勿公开分享，泄露后可在服务端更换密钥使其失效。
+            订阅地址包含访问令牌，仅站长可见；请勿公开分享。配置了 TVBOX_TOKEN 时可单独轮换该令牌使其失效，不影响任何人登录。
           </p>
         </div>
 

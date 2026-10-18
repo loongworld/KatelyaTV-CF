@@ -20,6 +20,7 @@ import {
   sessionCookieOptions,
   USER_COOKIE,
 } from '@/lib/session';
+import { getSessionVersion } from '@/lib/sessionVersion';
 
 export const runtime = 'edge';
 
@@ -119,7 +120,18 @@ export async function POST(req: NextRequest) {
         const config = await getConfig();
         const user = config.UserConfig.Users.find((u) => u.username === username);
         banned = !!user?.banned;
-        session = { username, role: user?.role === 'admin' ? 'admin' : 'user' };
+        let sv = 0;
+        try {
+          sv = (await getSessionVersion(username)) ?? 0;
+        } catch (err) {
+          // 版本读取失败不阻断登录：token 里按 0 记录，后续校验层同样 fail-open
+          console.warn('读取会话版本失败，按 0 处理:', err);
+        }
+        session = {
+          username,
+          role: user?.role === 'admin' ? 'admin' : 'user',
+          sv,
+        };
       }
     }
 

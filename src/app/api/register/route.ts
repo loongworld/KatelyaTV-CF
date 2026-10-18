@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       await db.saveAdminConfig(config);
       invalidateConfigCache();
 
-      const session: Session = { username, role: 'user' };
+      const session: Session = { username, role: 'user', sv: 0 };
       const value = await createSessionValue(session);
       if (!value) {
         return NextResponse.json({ error: '服务端未配置会话密钥' }, { status: 500 });

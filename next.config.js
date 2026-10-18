@@ -1,6 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
+  // 注意：不要启用 output: 'standalone'——那是 Docker/next start 的产物形态，
+  // 本仓库经 @cloudflare/next-on-pages 部署，standalone 输出既不需要，
+  // 还会在 Windows 本地构建时因符号链接权限（EPERM）直接失败。
   eslint: {
     dirs: ['src'],
   },

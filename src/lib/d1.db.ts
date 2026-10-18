@@ -344,10 +344,24 @@ export class D1Storage implements IStorage {
   async changePassword(userName: string, newPassword: string): Promise<void> {
     try {
       const db = await this.getDatabase();
-      await db
-        .prepare('UPDATE users SET password = ? WHERE username = ?')
-        .bind(await hashPassword(newPassword), userName)
-        .run();
+      const hashed = await hashPassword(newPassword);
+      try {
+        // 同时自增会话版本：改密后旧会话（含被改密者本人）最多 30 秒内全部失效
+        await db
+          .prepare(
+            'UPDATE users SET password = ?, session_version = COALESCE(session_version, 0) + 1 WHERE username = ?'
+          )
+          .bind(hashed, userName)
+          .run();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!/no such column/i.test(message)) throw err;
+        // 未执行 session_version 迁移的库：退回只更新密码
+        await db
+          .prepare('UPDATE users SET password = ? WHERE username = ?')
+          .bind(hashed, userName)
+          .run();
+      }
     } catch (err) {
       console.error('Failed to change password:', err);
       throw err;
