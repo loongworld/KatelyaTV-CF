@@ -75,6 +75,42 @@ function isBlockedHost(hostname: string): boolean {
   return false;
 }
 
+/**
+ * 按文件头魔数判断是否为受支持的位图。
+ * 上游的 Content-Type 不可信：豆瓣对疑似异常的出口 IP 会返回 13 字节的
+ * "cdn error 001" 文本，Content-Type 却写着 image/jpeg——只信声明就会把
+ * 这段垃圾当图片缓存 7 天，前端只能显示裂图。
+ */
+function looksLikeImage(b: Uint8Array): boolean {
+  if (b.length < 12) return false;
+  // JPEG
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true;
+  // PNG
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true;
+  // GIF
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return true;
+  // BMP
+  if (b[0] === 0x42 && b[1] === 0x4d) return true;
+  // ICO
+  if (b[0] === 0x00 && b[1] === 0x00 && b[2] === 0x01 && b[3] === 0x00) return true;
+  // RIFF....WEBP
+  if (
+    b[0] === 0x52 &&
+    b[1] === 0x49 &&
+    b[2] === 0x46 &&
+    b[3] === 0x46 &&
+    b[8] === 0x57 &&
+    b[9] === 0x45 &&
+    b[10] === 0x42 &&
+    b[11] === 0x50
+  ) {
+    return true;
+  }
+  // ISO-BMFF（avif / heic）: 第 4-8 字节是 'ftyp'
+  if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return true;
+  return false;
+}
+
 function validateTarget(raw: string): URL | null {
   let url: URL;
   try {
@@ -183,6 +219,13 @@ export async function GET(request: Request) {
     for (const chunk of chunks) {
       merged.set(chunk, cursor);
       cursor += chunk.byteLength;
+    }
+
+    // 声明是图片不等于内容是图片，按魔数再校验一次
+    if (!looksLikeImage(merged)) {
+      return addCorsHeaders(
+        NextResponse.json({ error: '目标返回的不是图片内容' }, { status: 502 })
+      );
     }
 
     const headers = new Headers();
