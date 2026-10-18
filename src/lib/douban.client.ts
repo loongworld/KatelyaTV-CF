@@ -140,7 +140,13 @@ export async function getDoubanCategories(
     );
 
     if (!response.ok) {
-      throw new Error('获取豆瓣分类数据失败');
+      // 透出服务端返回的 details（如上游 HTTP 状态），便于定位问题
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        details?: string;
+      };
+      const detail = data.details ? `（${data.details}）` : '';
+      throw new Error(`${data.error || '获取豆瓣分类数据失败'}${detail}`);
     }
 
     return response.json();

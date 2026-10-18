@@ -1,6 +1,8 @@
+/* eslint-disable no-console */
 import { NextResponse } from 'next/server';
 
 import { getCacheTime } from '@/lib/config';
+import { fetchDoubanWithRetry, getDefaultCache } from '@/lib/doubanHttp';
 import { DoubanItem, DoubanResult } from '@/lib/types';
 
 interface DoubanCategoryApiResponse {
@@ -22,36 +24,13 @@ interface DoubanCategoryApiResponse {
 async function fetchDoubanData(
   url: string
 ): Promise<DoubanCategoryApiResponse> {
-  // 添加超时控制
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+  const response = await fetchDoubanWithRetry(url);
 
-  // 设置请求选项，包括信号和头部
-  const fetchOptions = {
-    signal: controller.signal,
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      Referer: 'https://movie.douban.com/',
-      Accept: 'application/json, text/plain, */*',
-      Origin: 'https://movie.douban.com',
-    },
-  };
-
-  try {
-    // 尝试直接访问豆瓣API
-    const response = await fetch(url, fetchOptions);
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    clearTimeout(timeoutId);
-    throw error;
+  if (!response.ok) {
+    throw new Error(`HTTP error! Status: ${response.status}`);
   }
+
+  return await response.json();
 }
 
 export const runtime = 'edge';
@@ -95,11 +74,46 @@ export async function GET(request: Request) {
     );
   }
 
-  const target = `https://m.douban.com/rexxar/api/v2/subject/recent_hot/${kind}?start=${pageStart}&limit=${pageLimit}&category=${category}&type=${type}`;
+  // URLSearchParams 负责对 category / type 等中文参数做百分号编码
+  const query = new URLSearchParams({
+    start: String(pageStart),
+    limit: String(pageLimit),
+    category,
+    type,
+  });
+  const target = `https://m.douban.com/rexxar/api/v2/subject/recent_hot/${kind}?${query}`;
 
   try {
-    // 调用豆瓣 API
-    const doubanData = await fetchDoubanData(target);
+    // 服务端缓存（10 分钟）：榜单数据变化不频繁，多标签 / 多设备浏览时
+    // 避免把所有请求都打到豆瓣上游（上游偶发限流/慢响应是 500 的主要来源）
+    const cache = getDefaultCache();
+    const cacheKey = new Request(
+      `https://douban-cache.invalid/categories/${kind}/${encodeURIComponent(category)}/${encodeURIComponent(type)}/${pageStart}/${pageLimit}`
+    );
+    let doubanData: DoubanCategoryApiResponse | null = null;
+    if (cache) {
+      try {
+        const hit = await cache.match(cacheKey);
+        if (hit) doubanData = (await hit.json()) as DoubanCategoryApiResponse;
+      } catch {
+        // 缓存读取失败不影响主流程
+      }
+    }
+    if (!doubanData) {
+      doubanData = await fetchDoubanData(target);
+      if (cache) {
+        try {
+          await cache.put(
+            cacheKey,
+            new Response(JSON.stringify(doubanData), {
+              headers: { 'Cache-Control': 'public, max-age=600' },
+            })
+          );
+        } catch {
+          // 缓存写入失败不影响主流程
+        }
+      }
+    }
 
     // 转换数据格式
     const list: DoubanItem[] = doubanData.items.map((item) => ({
@@ -124,6 +138,8 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
+    // 记录真实原因，便于通过 `wrangler pages deployment tail` 定位
+    console.error('[douban/categories] 上游请求失败:', (error as Error).message);
     return NextResponse.json(
       { error: '获取豆瓣数据失败', details: (error as Error).message },
       { status: 500 }
