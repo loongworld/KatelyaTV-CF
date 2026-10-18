@@ -25,6 +25,54 @@ export interface SearchOptions {
 const SEARCH_TIMEOUT_MS = 8000;
 const MAX_DESC_LENGTH = 160;
 
+/**
+ * 苹果 CMS 播放页地址补全。
+ * 形如 /play/<token>（结尾无扩展名）的地址实际是播放页，其 HLS 直链为
+ * /play/<token>/index.m3u8（2026-10-18 实测：红牛、新浪、速博、金鹰等源
+ * 均为此形态，补全后可正常拉流；share/<token> 形态实测补全无效、不处理）。
+ */
+function normalizePlayUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return trimmed;
+  try {
+    const u = new URL(trimmed);
+    if (/\/play\/[A-Za-z0-9_-]+$/.test(u.pathname)) {
+      return `${trimmed.replace(/\/+$/, '')}/index.m3u8`;
+    }
+  } catch {
+    // 非法 URL 原样返回
+  }
+  return trimmed;
+}
+
+/**
+ * 从 vod_play_url 原始串提取播放地址（搜索与详情共用）。
+ * 格式：多线路以 $$$ 分隔；线路内以 # 分隔集；每集为 "名称$地址"（名称可缺省）。
+ * 注意：不要求地址以 .m3u8 结尾——历史上用 /\.m3u8/ 正则提取，
+ * 会把 /play/<token> 形态（补全后可用）的整批集直接丢弃（2026-10-18 修复）。
+ * 多线路时选集数最多的一条。
+ */
+function extractPlayUrls(vodPlayUrl: string): string[] {
+  let best: string[] = [];
+  for (const line of vodPlayUrl.split('$$$')) {
+    const urls = line
+      .split('#')
+      .map((seg) => {
+        const u = seg
+          .split('$')
+          .map((s) => s.trim())
+          .find((s) => /^https?:\/\//i.test(s));
+        if (!u) return '';
+        const parenIndex = u.indexOf('(');
+        return parenIndex > 0 ? u.substring(0, parenIndex) : u;
+      })
+      .filter(Boolean)
+      .map(normalizePlayUrl);
+    if (urls.length > best.length) best = urls;
+  }
+  return Array.from(new Set(best));
+}
+
 /** 列表结果中的简介截断，避免搜索结果体积过大 */
 function truncateDesc(raw?: string): string {
   const text = cleanHtmlTags(raw || '');
@@ -33,25 +81,7 @@ function truncateDesc(raw?: string): string {
 
 function mapSearchItems(list: ApiSearchItem[], apiSite: ApiSite): SearchResult[] {
   return list.map((item) => {
-    let episodes: string[] = [];
-
-    // 使用正则表达式从 vod_play_url 提取 m3u8 链接
-    if (item.vod_play_url) {
-      const m3u8Regex = /\$(https?:\/\/[^"'\s]+?\.m3u8)/g;
-      const vod_play_url_array = item.vod_play_url.split('$$$');
-      vod_play_url_array.forEach((url: string) => {
-        const matches = url.match(m3u8Regex) || [];
-        if (matches.length > episodes.length) {
-          episodes = matches;
-        }
-      });
-    }
-
-    episodes = Array.from(new Set(episodes)).map((link: string) => {
-      link = link.substring(1); // 去掉开头的 $
-      const parenIndex = link.indexOf('(');
-      return parenIndex > 0 ? link.substring(0, parenIndex) : link;
-    });
+    const episodes = item.vod_play_url ? extractPlayUrls(item.vod_play_url) : [];
 
     return {
       id: item.vod_id.toString(),
@@ -217,22 +247,9 @@ export async function getDetailFromApi(
   const videoDetail = data.list[0];
   let episodes: string[] = [];
 
-  // 处理播放源拆分
+  // 处理播放源拆分（与搜索结果共用提取逻辑）
   if (videoDetail.vod_play_url) {
-    const playSources = videoDetail.vod_play_url.split('$$$');
-    if (playSources.length > 0) {
-      const mainSource = playSources[0];
-      const episodeList = mainSource.split('#');
-      episodes = episodeList
-        .map((ep: string) => {
-          const parts = ep.split('$');
-          return parts.length > 1 ? parts[1] : '';
-        })
-        .filter(
-          (url: string) =>
-            url && (url.startsWith('http://') || url.startsWith('https://'))
-        );
-    }
+    episodes = extractPlayUrls(videoDetail.vod_play_url);
   }
 
   // 如果播放源为空，则尝试从内容中解析 m3u8
