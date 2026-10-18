@@ -1,81 +1,84 @@
--- D1 数据库初始化脚本
--- 用于创建 KatelyaTV 所需的数据表
+-- KatelyaTV D1 初始化脚本
+-- 与 src/lib/d1.db.ts 的查询逐列对齐（2026-10-18 依据线上库 sqlite_master 核对）
+--
+-- 用法：
+--   wrangler d1 execute katelyatv-db --remote --file=./scripts/d1-init.sql
+--
+-- ⚠️ 本脚本的列名必须与 d1.db.ts 保持一致。历史上这里用的是
+-- user_id / record_key / video_id 等列名，而代码查的是 username / key，
+-- 结果收藏、播放记录、搜索历史、跳过配置四个接口全部 500
+--（2026-09-15 的线上事故，当时是手工在线上执行 DDL 才修好）。
+-- 改这个文件之前，请先 grep 一遍 src/lib/d1.db.ts 里对应的列名。
 
--- 用户表
+-- 用户
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE NOT NULL,
-  password TEXT NOT NULL,
+  password TEXT NOT NULL,              -- PBKDF2-SHA256 哈希串，见 src/lib/password.ts
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 播放记录表
+-- 播放记录
 CREATE TABLE IF NOT EXISTS play_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
-  record_key TEXT NOT NULL,
-  video_url TEXT,
-  current_time REAL DEFAULT 0,
-  duration REAL DEFAULT 0,
-  episode_index INTEGER DEFAULT 0,
-  episode_url TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  UNIQUE (user_id, record_key)
-);
-
--- 收藏表
-CREATE TABLE IF NOT EXISTS favorites (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
-  favorite_key TEXT NOT NULL,
+  username TEXT NOT NULL,
+  key TEXT NOT NULL,                   -- `${source}+${id}`
   title TEXT,
-  cover_url TEXT,
-  rating REAL,
+  source_name TEXT,
+  cover TEXT,
   year TEXT,
-  area TEXT,
-  category TEXT,
-  actors TEXT,
-  director TEXT,
-  description TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  UNIQUE (user_id, favorite_key)
+  index_episode INTEGER DEFAULT 0,
+  total_episodes INTEGER DEFAULT 0,
+  play_time REAL DEFAULT 0,
+  total_time REAL DEFAULT 0,
+  save_time INTEGER,
+  search_title TEXT,
+  PRIMARY KEY (username, key)
 );
 
--- 搜索历史表
+-- 收藏
+CREATE TABLE IF NOT EXISTS favorites (
+  username TEXT NOT NULL,
+  key TEXT NOT NULL,
+  title TEXT,
+  source_name TEXT,
+  cover TEXT,
+  year TEXT,
+  total_episodes INTEGER DEFAULT 0,
+  save_time INTEGER,
+  search_title TEXT,
+  PRIMARY KEY (username, key)
+);
+
+-- 搜索历史
 CREATE TABLE IF NOT EXISTS search_history (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
+  username TEXT NOT NULL,
   keyword TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_search_history_username ON search_history(username);
 
--- 跳过配置表
+-- 跳过配置（片头片尾）
 CREATE TABLE IF NOT EXISTS skip_configs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
-  config_key TEXT NOT NULL,
-  start_time INTEGER DEFAULT 0,
-  end_time INTEGER DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  UNIQUE (user_id, config_key)
+  username TEXT NOT NULL,
+  key TEXT NOT NULL,
+  source TEXT,
+  video_id TEXT,
+  title TEXT,
+  segments TEXT,                       -- JSON 数组，见 EpisodeSkipConfig.segments
+  updated_time INTEGER,
+  PRIMARY KEY (username, key)
 );
 
--- 用户设置表
+-- 用户设置（整个 UserSettings 以 JSON 存放）
 CREATE TABLE IF NOT EXISTS user_settings (
   username TEXT PRIMARY KEY,
   settings TEXT,
   updated_time INTEGER
 );
 
--- 管理员配置表
+-- 管理员配置：运行时代码只读写 config_key = 'main_config' 这一行
 CREATE TABLE IF NOT EXISTS admin_configs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   config_key TEXT UNIQUE NOT NULL,
@@ -84,33 +87,28 @@ CREATE TABLE IF NOT EXISTS admin_configs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+INSERT OR IGNORE INTO admin_configs (config_key, config_value, description)
+  VALUES ('main_config', '{}', '主要管理员配置');
 
--- 插入默认管理员配置
-INSERT OR IGNORE INTO admin_configs (config_key, config_value, description) VALUES
-('site_name', 'KatelyaTV', '站点名称'),
-('site_description', '高性能影视播放平台', '站点描述'),
-('enable_register', 'true', '是否允许用户注册'),
-('max_users', '100', '最大用户数量'),
-('cache_ttl', '3600', '缓存时间（秒）');
+-- 登录失败限速（src/lib/loginLimiter.ts 会在运行时自建，这里预建可省掉那次 DDL）
+CREATE TABLE IF NOT EXISTS login_attempts (
+  scope_key TEXT PRIMARY KEY,
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  window_start INTEGER NOT NULL DEFAULT 0,
+  locked_until INTEGER NOT NULL DEFAULT 0
+);
 
--- 创建索引以提高查询性能
-CREATE INDEX IF NOT EXISTS idx_play_records_user_id ON play_records(user_id);
-CREATE INDEX IF NOT EXISTS idx_play_records_record_key ON play_records(record_key);
-CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id);
-CREATE INDEX IF NOT EXISTS idx_search_history_user_id ON search_history(user_id);
-CREATE INDEX IF NOT EXISTS idx_skip_configs_user_id ON skip_configs(user_id);
+-- 索引说明：
+-- play_records / favorites / skip_configs 的主键是 (username, key)，其左前缀
+-- 已经能服务 WHERE username = ?，不要再给 username 单独建索引——那是纯写入负担。
+-- 如果将来单用户记录数上万、ORDER BY save_time 开始变慢，再加：
+--   CREATE INDEX IF NOT EXISTS idx_play_records_user_save ON play_records(username, save_time DESC);
+--   CREATE INDEX IF NOT EXISTS idx_favorites_user_save ON favorites(username, save_time DESC);
 
--- 创建视图以简化查询
-CREATE VIEW IF NOT EXISTS user_stats AS
-SELECT 
-  u.id,
-  u.username,
-  COUNT(DISTINCT pr.id) as play_count,
-  COUNT(DISTINCT f.id) as favorite_count,
-  COUNT(DISTINCT sh.id) as search_count,
-  u.created_at
-FROM users u
-LEFT JOIN play_records pr ON u.id = pr.user_id
-LEFT JOIN favorites f ON u.id = f.user_id
-LEFT JOIN search_history sh ON u.id = sh.user_id
-GROUP BY u.id, u.username, u.created_at;
+-- 从更早的 user_id / record_key 结构升级（会丢这四张表的旧数据，请先备份）：
+--   DROP VIEW  IF EXISTS user_stats;   -- 旧结构遗留的坏视图，引用已不存在的 user_id 列
+--   DROP TABLE IF EXISTS play_records;
+--   DROP TABLE IF EXISTS favorites;
+--   DROP TABLE IF EXISTS search_history;
+--   DROP TABLE IF EXISTS skip_configs;
+-- 然后重新执行本脚本。

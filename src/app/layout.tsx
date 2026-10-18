@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
 
 import './globals.css';
-import 'sweetalert2/dist/sweetalert2.min.css';
 
 import { getConfig } from '@/lib/config';
 
@@ -17,10 +16,7 @@ export async function generateMetadata(): Promise<Metadata> {
   
   try {
     // 只有在非 d1 和 upstash 存储类型时才尝试获取配置
-    if (
-      process.env.NEXT_PUBLIC_STORAGE_TYPE !== 'd1' &&
-      process.env.NEXT_PUBLIC_STORAGE_TYPE !== 'upstash'
-    ) {
+    if (process.env.NEXT_PUBLIC_STORAGE_TYPE !== 'd1') {
       const config = await getConfig();
       siteName = config.SiteConfig.SiteName;
     }
@@ -64,13 +60,18 @@ export default async function RootLayout({
   let enableRegister = process.env.NEXT_PUBLIC_ENABLE_REGISTER === 'true';
   let imageProxy = process.env.NEXT_PUBLIC_IMAGE_PROXY || '';
   let doubanProxy = process.env.NEXT_PUBLIC_DOUBAN_PROXY || '';
+  // 构建期没有 D1 绑定，读配置必然失败；跳过它，避免把一次失败固化成模块级缓存。
+  // 运行时 middleware 会强制动态渲染，配置照常生效（后台改站点名/公告即时可见）。
+  const isBuildPhase = process.env.NEXT_PHASE === 'phase-production-build';
   try {
-    const config = await getConfig();
-    siteName = config.SiteConfig.SiteName;
-    announcement = config.SiteConfig.Announcement;
-    enableRegister = config.UserConfig.AllowRegister;
-    imageProxy = config.SiteConfig.ImageProxy;
-    doubanProxy = config.SiteConfig.DoubanProxy;
+    if (!isBuildPhase) {
+      const config = await getConfig();
+      siteName = config.SiteConfig.SiteName;
+      announcement = config.SiteConfig.Announcement;
+      enableRegister = config.UserConfig.AllowRegister;
+      imageProxy = config.SiteConfig.ImageProxy;
+      doubanProxy = config.SiteConfig.DoubanProxy;
+    }
   } catch {
     // 配置读取失败时保持环境变量 / 默认值
   }

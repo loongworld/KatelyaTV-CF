@@ -6,7 +6,14 @@ import Artplayer from 'artplayer';
 import Hls from 'hls.js';
 import { Heart } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import {
   deleteFavorite,
@@ -167,6 +174,17 @@ function PlayPageClient() {
   // 播放器时间状态（用于跳过功能）
   const [currentPlayTime, setCurrentPlayTime] = useState<number>(0);
   const [videoDuration, setVideoDuration] = useState<number>(0);
+  // 上次写入 currentPlayTime 的整数秒，用于节流 timeupdate
+  const lastPlayTimeRef = useRef<number>(-1);
+
+  // 播放错误浮层（区别于整页 error，浮层只遮播放器且可直接重试/换源）
+  const [playerError, setPlayerError] = useState<string | null>(null);
+  // 播放器重建令牌：点击「重试」时自增，触发播放器初始化 effect 重新执行
+  const [playerReloadKey, setPlayerReloadKey] = useState<number>(0);
+  // 自动播放下一集的延迟定时器
+  const endedTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // HLS 网络错误退避重试定时器
+  const hlsRetryTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // 跳过设置状态
   const [isSkipSettingMode, setIsSkipSettingMode] = useState<boolean>(false);
@@ -674,13 +692,25 @@ function PlayPageClient() {
     initFromHistory();
   }, []);
 
+  // 清掉待执行的「播放结束后自动下一集」定时器（只操作 ref，可安全复用）
+  const clearEndedTimeout = () => {
+    if (endedTimeoutRef.current) {
+      clearTimeout(endedTimeoutRef.current);
+      endedTimeoutRef.current = null;
+    }
+  };
+
   // 处理换源
-  const handleSourceChange = async (
+  const handleSourceChangeImpl = async (
     newSource: string,
     newId: string,
     newTitle: string
   ) => {
     try {
+      // 清掉待执行的自动换集定时器，并收起上一次的错误浮层
+      clearEndedTimeout();
+      setPlayerError(null);
+
       // 显示换源加载状态
       setVideoLoadingStage('sourceChanging');
       setIsVideoLoading(true);
@@ -749,6 +779,57 @@ function PlayPageClient() {
     }
   };
 
+  // 稳定引用：函数体内读取的 state 只有 availableSources 与 currentEpisodeIndex
+  const handleSourceChange = useCallback(handleSourceChangeImpl, [
+    availableSources,
+    currentEpisodeIndex,
+  ]);
+
+  // 播放出错后重试：销毁当前播放器并重建（与「去广告」开关同一套重建流程）
+  const handleRetryPlay = () => {
+    setPlayerError(null);
+    clearEndedTimeout();
+    if (hlsRetryTimerRef.current) {
+      clearTimeout(hlsRetryTimerRef.current);
+      hlsRetryTimerRef.current = null;
+    }
+
+    // 尽量从当前进度继续
+    resumeTimeRef.current = artPlayerRef.current?.currentTime || 0;
+
+    if (artPlayerRef.current) {
+      try {
+        if (artPlayerRef.current.video && artPlayerRef.current.video.hls) {
+          artPlayerRef.current.video.hls.destroy();
+        }
+        artPlayerRef.current.destroy();
+      } catch (err) {
+        console.warn('重试前销毁播放器失败:', err);
+      }
+      artPlayerRef.current = null;
+    }
+
+    setVideoLoadingStage('initing');
+    setIsVideoLoading(true);
+    setPlayerReloadKey((key) => key + 1);
+  };
+
+  // 播放出错后切换到下一个可用源（只有一个源时按钮不可用）
+  const handlePlayNextSource = () => {
+    if (availableSources.length <= 1) return;
+    const currentIndex = availableSources.findIndex(
+      (source) =>
+        source.source === currentSourceRef.current &&
+        source.id === currentIdRef.current
+    );
+    const nextSource =
+      availableSources[(currentIndex + 1) % availableSources.length];
+    if (!nextSource) return;
+
+    setPlayerError(null);
+    handleSourceChange(nextSource.source, nextSource.id, nextSource.title);
+  };
+
   useEffect(() => {
     document.addEventListener('keydown', handleKeyboardShortcuts);
     return () => {
@@ -760,10 +841,12 @@ function PlayPageClient() {
   // 集数切换
   // ---------------------------------------------------------------------------
   // 处理集数切换
-  const handleEpisodeChange = (episodeNumber: number) => {
+  const handleEpisodeChangeImpl = (episodeNumber: number) => {
     // episodeNumber是显示的集数（从1开始），需要转换为索引（从0开始）
     const episodeIndex = episodeNumber - 1;
     if (episodeIndex >= 0 && episodeIndex < totalEpisodes) {
+      // 手动切集时取消待执行的自动下一集，避免 1 秒后又被改回下一集
+      clearEndedTimeout();
       // 在更换集数前保存当前播放进度
       if (artPlayerRef.current && artPlayerRef.current.paused) {
         saveCurrentPlayProgress();
@@ -772,10 +855,16 @@ function PlayPageClient() {
     }
   };
 
+  // 稳定引用：函数体内读取的 state 只有 totalEpisodes
+  const handleEpisodeChange = useCallback(handleEpisodeChangeImpl, [
+    totalEpisodes,
+  ]);
+
   const handlePreviousEpisode = () => {
     const d = detailRef.current;
     const idx = currentEpisodeIndexRef.current;
     if (d && d.episodes && idx > 0) {
+      clearEndedTimeout();
       if (artPlayerRef.current && !artPlayerRef.current.paused) {
         saveCurrentPlayProgress();
       }
@@ -787,6 +876,7 @@ function PlayPageClient() {
     const d = detailRef.current;
     const idx = currentEpisodeIndexRef.current;
     if (d && d.episodes && idx < d.episodes.length - 1) {
+      clearEndedTimeout();
       if (artPlayerRef.current && !artPlayerRef.current.paused) {
         saveCurrentPlayProgress();
       }
@@ -1061,6 +1151,9 @@ function PlayPageClient() {
     }
     console.log(videoUrl);
 
+    // 重新创建或切换播放地址时，收起上一次的错误浮层
+    setPlayerError(null);
+
     // 检测是否为WebKit浏览器
     const isWebkit =
       typeof window !== 'undefined' &&
@@ -1164,23 +1257,50 @@ function PlayPageClient() {
 
             ensureVideoSource(video, url);
 
+            // 网络错误重试计数，每个 Hls 实例独立
+            let networkRetryCount = 0;
+
             hls.on(Hls.Events.ERROR, function (event: any, data: any) {
               console.error('HLS Error:', event, data);
-              if (data.fatal) {
-                switch (data.type) {
-                  case Hls.ErrorTypes.NETWORK_ERROR:
-                    console.log('网络错误，尝试恢复...');
-                    hls.startLoad();
-                    break;
-                  case Hls.ErrorTypes.MEDIA_ERROR:
-                    console.log('媒体错误，尝试恢复...');
-                    hls.recoverMediaError();
-                    break;
-                  default:
-                    console.log('无法恢复的错误');
-                    hls.destroy();
-                    break;
+              if (!data || !data.fatal) return;
+
+              switch (data.type) {
+                case Hls.ErrorTypes.NETWORK_ERROR: {
+                  if (networkRetryCount < 3) {
+                    // 退避 1s / 2s / 4s
+                    const delay = 1000 * Math.pow(2, networkRetryCount);
+                    networkRetryCount += 1;
+                    console.log(
+                      `网络错误，${delay}ms 后重试（第 ${networkRetryCount}/3 次）`
+                    );
+                    if (hlsRetryTimerRef.current) {
+                      clearTimeout(hlsRetryTimerRef.current);
+                    }
+                    hlsRetryTimerRef.current = setTimeout(() => {
+                      hlsRetryTimerRef.current = null;
+                      // 播放器可能已被重建，避免对旧实例调用
+                      if (video.hls === hls) {
+                        hls.startLoad();
+                      }
+                    }, delay);
+                  } else {
+                    console.log('网络错误重试次数已达上限');
+                    setPlayerError('网络错误，多次重试仍无法播放');
+                    setIsVideoLoading(false);
+                  }
+                  break;
                 }
+                case Hls.ErrorTypes.MEDIA_ERROR:
+                  console.log('媒体错误，尝试恢复...');
+                  hls.recoverMediaError();
+                  break;
+                default:
+                  console.log('无法恢复的错误');
+                  // 先给出反馈，再销毁
+                  setPlayerError('播放出错，无法自动恢复');
+                  setIsVideoLoading(false);
+                  hls.destroy();
+                  break;
               }
             });
           },
@@ -1246,12 +1366,20 @@ function PlayPageClient() {
       // 监听播放时间更新（用于跳过功能）
       artPlayerRef.current.on('video:timeupdate', () => {
         const currentTime = artPlayerRef.current.currentTime || 0;
-        setCurrentPlayTime(currentTime);
-        
+
+        // 节流：只有整数秒变化时才写 state（原生 timeupdate 约 250ms 一次）
+        // SkipController 的跳过判定按秒比较，1 秒粒度不影响判定
+        const currentSecond = Math.floor(currentTime);
+        if (currentSecond !== lastPlayTimeRef.current) {
+          lastPlayTimeRef.current = currentSecond;
+          setCurrentPlayTime(currentTime);
+        }
+
         // 同时更新时长（防止ready事件中获取不到）
+        // 函数式更新比较，避免闭包里的旧值让判断恒为真、每次都 setState
         const duration = artPlayerRef.current.duration || 0;
-        if (duration > 0 && videoDuration !== duration) {
-          setVideoDuration(duration);
+        if (duration > 0) {
+          setVideoDuration((prev) => (prev === duration ? prev : duration));
         }
       });
 
@@ -1284,13 +1412,20 @@ function PlayPageClient() {
 
         // 隐藏换源加载状态
         setIsVideoLoading(false);
+        // 能播了就收起错误浮层
+        setPlayerError(null);
+      });
+
+      // 播放真正恢复时也收起错误浮层，避免误报残留遮挡画面
+      artPlayerRef.current.on('video:playing', () => {
+        setPlayerError(null);
       });
 
       artPlayerRef.current.on('error', (err: any) => {
         console.error('播放器错误:', err);
-        if (artPlayerRef.current.currentTime > 0) {
-          return;
-        }
+        // 不再静默返回：给出可操作的反馈
+        setPlayerError('播放出错，请重试或更换播放源');
+        setIsVideoLoading(false);
       });
 
       // 监听视频播放结束事件，自动播放下一集
@@ -1298,7 +1433,10 @@ function PlayPageClient() {
         const d = detailRef.current;
         const idx = currentEpisodeIndexRef.current;
         if (d && d.episodes && idx < d.episodes.length - 1) {
-          setTimeout(() => {
+          // 定时器存进 ref，切集/换源/卸载时清理
+          clearEndedTimeout();
+          endedTimeoutRef.current = setTimeout(() => {
+            endedTimeoutRef.current = null;
             setCurrentEpisodeIndex(idx + 1);
           }, 1000);
         }
@@ -1333,7 +1471,18 @@ function PlayPageClient() {
       console.error('创建播放器失败:', err);
       setError('播放器初始化失败');
     }
-  }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled]);
+  }, [Artplayer, Hls, videoUrl, loading, blockAdEnabled, playerReloadKey]);
+
+  // 加载超时兜底：20 秒仍未 canplay 就退出加载态并提示
+  // 整页还在 loading（搜索/优选）时不计时，避免开局误报
+  useEffect(() => {
+    if (loading || !isVideoLoading) return;
+    const timer = setTimeout(() => {
+      setIsVideoLoading(false);
+      setPlayerError('视频加载超时，请重试或更换播放源');
+    }, 20000);
+    return () => clearTimeout(timer);
+  }, [loading, isVideoLoading]);
 
   // 当组件卸载时清理定时器
   useEffect(() => {
@@ -1341,8 +1490,64 @@ function PlayPageClient() {
       if (saveIntervalRef.current) {
         clearInterval(saveIntervalRef.current);
       }
+      if (endedTimeoutRef.current) {
+        clearTimeout(endedTimeoutRef.current);
+        endedTimeoutRef.current = null;
+      }
+      if (hlsRetryTimerRef.current) {
+        clearTimeout(hlsRetryTimerRef.current);
+        hlsRetryTimerRef.current = null;
+      }
+      // 卸载（含换影片重新挂载）时销毁播放器，避免旧实例和 HLS 残留
+      const player = artPlayerRef.current;
+      if (player) {
+        try {
+          if (player.video && player.video.hls) {
+            player.video.hls.destroy();
+          }
+          player.destroy();
+        } catch (err) {
+          console.warn('卸载时销毁播放器失败:', err);
+        }
+        artPlayerRef.current = null;
+      }
     };
   }, []);
+
+  // 选集面板的 props 都来自 state/ref，用 useMemo 稳定元素引用，
+  // 避免播放进度每秒更新时连带重渲染整个选集面板
+  const episodeSelectorNode = useMemo(
+    () => (
+      <EpisodeSelector
+        totalEpisodes={totalEpisodes}
+        episodesPerPage={50}
+        value={currentEpisodeIndex + 1}
+        onChange={handleEpisodeChange}
+        onSourceChange={handleSourceChange}
+        currentSource={currentSource}
+        currentId={currentId}
+        videoTitle={searchTitle || videoTitle}
+        availableSources={availableSources}
+        sourceSearchLoading={sourceSearchLoading}
+        sourceSearchError={sourceSearchError}
+        precomputedVideoInfo={precomputedVideoInfo}
+      />
+    ),
+    [
+      totalEpisodes,
+      currentEpisodeIndex,
+      handleEpisodeChange,
+      handleSourceChange,
+      currentSource,
+      currentId,
+      searchTitle,
+      videoTitle,
+      availableSources,
+      sourceSearchLoading,
+      sourceSearchError,
+      precomputedVideoInfo,
+    ]
+  );
 
   if (loading) {
     return (
@@ -1637,6 +1842,32 @@ function PlayPageClient() {
                     </div>
                   </div>
                 )}
+
+                {/* 播放错误浮层：只挡住卡片本身，播放器其它区域仍可点击 */}
+                {playerError && (
+                  <div className='absolute inset-0 flex items-center justify-center z-[600] pointer-events-none'>
+                    <div className='pointer-events-auto max-w-md mx-4 bg-black/85 backdrop-blur-sm rounded-xl px-6 py-5 text-center shadow-lg'>
+                      <p className='text-white font-medium mb-4'>
+                        ⚠️ {playerError}
+                      </p>
+                      <div className='flex flex-wrap gap-3 justify-center'>
+                        <button
+                          onClick={handleRetryPlay}
+                          className='px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white rounded-xl font-medium hover:from-green-600 hover:to-emerald-700 transition-colors duration-200 shadow-lg'
+                        >
+                          🔄 重试
+                        </button>
+                        <button
+                          onClick={handlePlayNextSource}
+                          disabled={availableSources.length <= 1}
+                          className='px-6 py-3 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-medium hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed'
+                        >
+                          ⏭ 换下一个源
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1648,20 +1879,7 @@ function PlayPageClient() {
                   : 'md:col-span-1 lg:opacity-100 lg:scale-100'
               }`}
             >
-              <EpisodeSelector
-                totalEpisodes={totalEpisodes}
-                episodesPerPage={50}
-                value={currentEpisodeIndex + 1}
-                onChange={handleEpisodeChange}
-                onSourceChange={handleSourceChange}
-                currentSource={currentSource}
-                currentId={currentId}
-                videoTitle={searchTitle || videoTitle}
-                availableSources={availableSources}
-                sourceSearchLoading={sourceSearchLoading}
-                sourceSearchError={sourceSearchError}
-                precomputedVideoInfo={precomputedVideoInfo}
-              />
+              {episodeSelectorNode}
             </div>
           </div>
         </div>
@@ -1763,10 +1981,27 @@ const FavoriteIcon = ({ filled }: { filled: boolean }) => {
   );
 };
 
+// key 只取「影片身份」参数（title/stitle/stype），不取 source/id/year：
+// Next 14 App Router 会把原生 window.history.replaceState 同步进路由，
+// 而本页初始化与换源都会用 replaceState 改写 source/id/year/title，
+// 若把它们放进 key，换源/优选后也会重新挂载整页。
+// title 用与搜索匹配一致的方式归一化（去空格 + 小写），
+// 这样初始化里把 title 规范成详情标题时不会触发多余的重新挂载。
+function PlayPageWithKey() {
+  const searchParams = useSearchParams();
+  const pageKey = [
+    (searchParams.get('title') || '').replaceAll(' ', '').toLowerCase(),
+    (searchParams.get('stitle') || '').replaceAll(' ', '').toLowerCase(),
+    searchParams.get('stype') || '',
+  ].join('|');
+
+  return <PlayPageClient key={pageKey} />;
+}
+
 export default function PlayPage() {
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <PlayPageClient />
+      <PlayPageWithKey />
     </Suspense>
   );
 }

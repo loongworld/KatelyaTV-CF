@@ -224,6 +224,28 @@ export default function VideoCard({
     actualSearchType,
   ]);
 
+  // 播放按钮：阻止冒泡到整卡，同时保留打开播放页的行为
+  const handlePlay = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleClick();
+    },
+    [handleClick]
+  );
+
+  // 键盘 / 遥控器：Enter、Space 打开播放页（焦点在卡片本身时才处理，避免和内部按钮冲突）
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.target !== e.currentTarget) return;
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleClick();
+      }
+    },
+    [handleClick]
+  );
+
   const config = useMemo(() => {
     const configs = {
       playrecord: {
@@ -268,8 +290,12 @@ export default function VideoCard({
 
   return (
     <div
-      className='group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out hover:scale-[1.05] hover:z-[500]'
+      role='button'
+      tabIndex={0}
+      aria-label={actualTitle}
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      className='group relative w-full rounded-lg bg-transparent cursor-pointer transition-all duration-300 ease-in-out hover:scale-[1.05] hover:z-[500] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-green-500 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent'
     >
       {/* 海报容器 */}
       <div className='relative aspect-[2/3] overflow-hidden rounded-lg'>
@@ -290,35 +316,54 @@ export default function VideoCard({
 
         {/* 播放按钮 */}
         {config.showPlayButton && (
-          <div className='absolute inset-0 flex items-center justify-center opacity-0 transition-all duration-300 ease-in-out delay-75 group-hover:opacity-100 group-hover:scale-100'>
-            <PlayCircleIcon
-              size={50}
-              strokeWidth={0.8}
-              className='text-white fill-transparent transition-all duration-300 ease-out hover:fill-green-500 hover:scale-[1.1]'
-            />
+          <div className='absolute inset-0 flex items-center justify-center opacity-0 transition-all duration-300 ease-in-out delay-75 group-hover:opacity-100 group-hover:scale-100 group-focus-within:opacity-100'>
+            <button
+              type='button'
+              aria-label='播放'
+              onClick={handlePlay}
+              className='flex items-center justify-center'
+            >
+              <PlayCircleIcon
+                size={50}
+                strokeWidth={0.8}
+                className='text-white fill-transparent transition-all duration-300 ease-out hover:fill-green-500 hover:scale-[1.1]'
+              />
+            </button>
           </div>
         )}
 
         {/* 操作按钮 */}
         {(config.showHeart || config.showCheckCircle) && (
-          <div className='absolute bottom-3 right-3 flex gap-3 opacity-0 translate-y-2 transition-all duration-300 ease-in-out group-hover:opacity-100 group-hover:translate-y-0'>
+          <div className='absolute bottom-3 right-3 flex gap-3 opacity-0 translate-y-2 transition-all duration-300 ease-in-out group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0'>
             {config.showCheckCircle && (
-              <CheckCircle
+              <button
+                type='button'
+                aria-label='删除观看记录'
                 onClick={handleDeleteRecord}
-                size={20}
-                className='text-white transition-all duration-300 ease-out hover:stroke-green-500 hover:scale-[1.1]'
-              />
+                className='flex items-center justify-center'
+              >
+                <CheckCircle
+                  size={20}
+                  className='text-white transition-all duration-300 ease-out hover:stroke-green-500 hover:scale-[1.1]'
+                />
+              </button>
             )}
             {config.showHeart && (
-              <Heart
+              <button
+                type='button'
+                aria-label={favorited ? '取消收藏' : '收藏'}
                 onClick={handleToggleFavorite}
-                size={20}
-                className={`transition-all duration-300 ease-out ${
-                  favorited
-                    ? 'fill-red-600 stroke-red-600'
-                    : 'fill-transparent stroke-white hover:stroke-red-400'
-                } hover:scale-[1.1]`}
-              />
+                className='flex items-center justify-center'
+              >
+                <Heart
+                  size={20}
+                  className={`transition-all duration-300 ease-out ${
+                    favorited
+                      ? 'fill-red-600 stroke-red-600'
+                      : 'fill-transparent stroke-white hover:stroke-red-400'
+                  } hover:scale-[1.1]`}
+                />
+              </button>
             )}
           </div>
         )}

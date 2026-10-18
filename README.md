@@ -20,15 +20,14 @@
 
 ## 特性
 
-- **聚合搜索**：一次请求并发检索全部采集源，常规/成人结果分组展示
+- **聚合搜索**：并发检索采集源，常规/成人结果分组展示；源数量超过单次请求上限时自动分片补齐
 - **秒开播放**：ArtPlayer + HLS，自动优选测速、多源一键切换
 - **观影体验**：断点续播、自动跳过片头片尾、画中画、网页全屏
 - **数据同步**：收藏、播放记录、搜索历史基于 D1 跨设备同步
-- **多用户**：站长（环境变量鉴权）+ 注册用户体系，角色区分 owner/user
-- **成人内容分级**：`is_adult` 站点级标记 + 用户级过滤开关（默认开启）
-- **TVBox 兼容**：`/tvbox` 输出 JSON / TXT / XML 订阅，配合 OrionTV 上电视
-- **图片代理**：内置 `/api/image-proxy` 边缘代理，破解豆瓣防盗链，边缘缓存半年
-- **PWA**：可安装到桌面/主屏，离线壳缓存
+- **多用户**：站长（环境变量鉴权）+ 注册用户体系，角色区分 owner/admin/user
+- **成人内容分级**：`is_adult` 站点级标记 + 用户级过滤开关（默认开启；关掉后成人源以独立分组展示）
+- **TVBox 兼容**：`/api/tvbox` 输出 JSON / TXT（Base64）订阅，配合 OrionTV 上电视
+- **图片代理**：内置 `/api/image-proxy` 边缘代理，破解豆瓣防盗链，边缘与浏览器各缓存 7 天
 
 ## 架构
 
@@ -90,7 +89,8 @@ wrangler d1 execute katelyatv-db --remote --file=./scripts/d1-init.sql -y
 | 变量 | 类型 | 说明 |
 |---|---|---|
 | `USERNAME` | Secret（加密） | 站长用户名 |
-| `AUTH_PASSWORD` | Secret（加密） | 站长密码 / 签名密钥 |
+| `AUTH_PASSWORD` | Secret（加密） | 站长密码 |
+| `SESSION_SECRET` | Secret（加密） | 会话签名密钥，≥32 位随机串（不配也能跑，但会退化用 `AUTH_PASSWORD` 派生） |
 
 > ⚠️ 不要使用 `PASSWORD` 作为变量名，它是 Cloudflare 保留绑定名（上游已知的坑）。
 
@@ -128,7 +128,9 @@ wrangler pages deploy .vercel/output/static --project-name katelyatv --branch ma
 | `NEXT_PUBLIC_ENABLE_REGISTER` | 构建 | Dashboard | 是否开放注册（`true`/`false`） |
 | `NEXTAUTH_URL` | 构建 + 运行 | Dashboard 或 shell | 站点完整 URL |
 | `USERNAME` | 运行 | Dashboard（Secret） | 站长用户名 |
-| `AUTH_PASSWORD` | 运行 | Dashboard（Secret） | 站长密码 / 签名密钥 |
+| `AUTH_PASSWORD` | 运行 | Dashboard（Secret） | 站长密码（登录校验用） |
+| `SESSION_SECRET` | 运行 | Dashboard（Secret） | 会话签名密钥，**建议配置**：≥32 位随机串。缺失时退化为由 `AUTH_PASSWORD` 直接派生（无 KDF，可被离线爆破） |
+| `CRON_SECRET` | 运行 | Dashboard（Secret） | `/api/cron` 的 Bearer 密钥；未配置时该接口返回 503（默认禁用） |
 
 > 站点名称、站点公告、图片代理前缀、豆瓣代理地址支持在 `/admin` 后台直接修改（保存至 D1 即时生效）；
 > 环境变量仅在后台未设置对应值时作为初始回退。

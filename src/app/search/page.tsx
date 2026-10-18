@@ -171,12 +171,12 @@ function SearchPageClient() {
       
       // 简化的搜索请求 - 成人内容过滤现在在API层面自动处理
       // 添加时间戳参数避免缓存问题
-      const timestamp = Date.now();
+      // 时间戳参数会让浏览器每次都重新请求，而服务端缓存键里并不含它，已移除
       const response = await fetch(
-        `/api/search?q=${encodeURIComponent(query.trim())}&t=${timestamp}`, 
+        `/api/search?q=${encodeURIComponent(query.trim())}&include_adult=true&offset=0`, 
         { 
           headers: {
-            'Cache-Control': 'no-cache, no-store, must-revalidate'
+            'Cache-Control': 'no-cache'
           }
         }
       );
@@ -204,6 +204,31 @@ function SearchPageClient() {
       }
       
       setShowResults(true);
+
+      // 一次请求只检索有限数量的源（免费版单请求子请求上限 50），
+      // 源总数超过上限时静默补齐剩余分片，不阻塞已展示的结果
+      const totalSources = typeof data.total_sources === 'number' ? data.total_sources : 0;
+      const queriedSources = typeof data.queried_sources === 'number' ? data.queried_sources : 0;
+      if (totalSources > queriedSources && queriedSources > 0) {
+        try {
+          const restResponse = await fetch(
+            `/api/search?q=${encodeURIComponent(
+              query.trim()
+            )}&include_adult=true&offset=${queriedSources}`
+          );
+          const restData = await restResponse.json();
+          const restRegular: SearchResult[] = restData.regular_results || [];
+          const restAdult: SearchResult[] = restData.adult_results || [];
+          if (restRegular.length > 0 || restAdult.length > 0) {
+            const mergedRegular = [...(data.regular_results || []), ...restRegular];
+            const mergedAdult = [...(data.adult_results || []), ...restAdult];
+            setGroupedResults({ regular: mergedRegular, adult: mergedAdult });
+            setSearchResults([...mergedRegular, ...mergedAdult]);
+          }
+        } catch {
+          // 分片补齐失败不影响已经展示的结果
+        }
+      }
     } catch (error) {
       setGroupedResults(null);
       setSearchResults([]);

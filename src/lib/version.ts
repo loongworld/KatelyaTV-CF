@@ -11,21 +11,24 @@ export enum UpdateStatus {
   FETCH_FAILED = 'fetch_failed', // 获取失败
 }
 
-// 远程版本检查URL配置（支持环境变量覆盖）
+// 远程版本检查URL配置（只认环境变量）
+// 原先这里还硬编码了两个默认地址，其中一个是第三方 GitHub 代理 ghfast.top：
+// 结果是每个访客每次打开页面都向第三方发一次请求、把 IP 交出去，
+// 而检查的又是上游 katelya77 仓库的版本号——对本 fork 没有意义。默认不再请求外部地址。
 const ENV_PRIMARY = process.env.NEXT_PUBLIC_VERSION_URL_PRIMARY;
 const ENV_BACKUP = process.env.NEXT_PUBLIC_VERSION_URL_BACKUP;
-const VERSION_CHECK_URLS = [
-  ENV_PRIMARY,
-  ENV_BACKUP,
-  'https://ghfast.top/raw.githubusercontent.com/katelya77/KatelyaTV/main/VERSION.txt',
-  'https://raw.githubusercontent.com/katelya77/KatelyaTV/main/VERSION.txt',
-].filter(Boolean) as string[];
+const VERSION_CHECK_URLS = [ENV_PRIMARY, ENV_BACKUP].filter(Boolean) as string[];
 
 /**
  * 检查是否有新版本可用
  * @returns Promise<UpdateStatus> - 返回版本检查状态
  */
 export async function checkForUpdates(): Promise<UpdateStatus> {
+  // 没配置外部版本地址就返回「无更新」，不做任何外部请求
+  if (VERSION_CHECK_URLS.length === 0) {
+    return UpdateStatus.NO_UPDATE;
+  }
+
   try {
     // 尝试从主要URL获取版本信息
     const primaryVersion = await fetchVersionFromUrl(VERSION_CHECK_URLS[0]);
@@ -34,7 +37,9 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
     }
 
     // 如果主要URL失败，尝试备用URL
-    const backupVersion = await fetchVersionFromUrl(VERSION_CHECK_URLS[1]);
+    const backupVersion = VERSION_CHECK_URLS[1]
+      ? await fetchVersionFromUrl(VERSION_CHECK_URLS[1])
+      : null;
     if (backupVersion) {
       return compareVersions(backupVersion);
     }

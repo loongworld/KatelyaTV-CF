@@ -4,7 +4,7 @@
 
 import { Filter, KeyRound, LogOut, Settings, Shield, User, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import { getAuthInfoFromBrowserCookie } from '@/lib/auth';
@@ -159,13 +159,13 @@ export const UserMenu: React.FC = () => {
     setPasswordError('');
   };
 
-  const handleCloseChangePassword = () => {
+  const handleCloseChangePassword = useCallback(() => {
     setIsChangePasswordOpen(false);
     setOldPassword('');
     setNewPassword('');
     setConfirmPassword('');
     setPasswordError('');
-  };
+  }, []);
 
   const handleSubmitChangePassword = async () => {
     setPasswordError('');
@@ -228,9 +228,40 @@ export const UserMenu: React.FC = () => {
     setIsOpen(false);
     // 跳转到内容过滤设置页面
     router.push('/settings');
-  };  const handleCloseSettings = () => {
-    setIsSettingsOpen(false);
   };
+
+  const handleCloseSettings = useCallback(() => {
+    setIsSettingsOpen(false);
+  }, []);
+
+  // 本地设置 / 修改密码弹窗：Escape 关闭，并锁定 body 滚动
+  useEffect(() => {
+    if (!isSettingsOpen && !isChangePasswordOpen) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (isChangePasswordOpen) {
+        handleCloseChangePassword();
+      } else {
+        handleCloseSettings();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [
+    isSettingsOpen,
+    isChangePasswordOpen,
+    handleCloseSettings,
+    handleCloseChangePassword,
+  ]);
 
   // 设置相关的处理函数
   const handleAggregateToggle = (value: boolean) => {
@@ -463,11 +494,19 @@ export const UserMenu: React.FC = () => {
       />
 
       {/* 设置面板 */}
-      <div className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] p-6'>
+      <div
+        role='dialog'
+        aria-modal='true'
+        aria-labelledby='settings-panel-title'
+        className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] p-6'
+      >
         {/* 标题栏 */}
         <div className='flex items-center justify-between mb-6'>
           <div className='flex items-center gap-3'>
-            <h3 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+            <h3
+              id='settings-panel-title'
+              className='text-xl font-bold text-gray-800 dark:text-gray-200'
+            >
               本地设置
             </h3>
             <button
@@ -660,10 +699,18 @@ export const UserMenu: React.FC = () => {
       />
 
       {/* 修改密码面板 */}
-      <div className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] p-6'>
+      <div
+        role='dialog'
+        aria-modal='true'
+        aria-labelledby='change-password-panel-title'
+        className='fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-white dark:bg-gray-900 rounded-xl shadow-xl z-[1001] p-6'
+      >
         {/* 标题栏 */}
         <div className='flex items-center justify-between mb-6'>
-          <h3 className='text-xl font-bold text-gray-800 dark:text-gray-200'>
+          <h3
+            id='change-password-panel-title'
+            className='text-xl font-bold text-gray-800 dark:text-gray-200'
+          >
             修改密码
           </h3>
           <button

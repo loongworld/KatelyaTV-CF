@@ -65,6 +65,7 @@ function mapSearchItems(list: ApiSearchItem[], apiSite: ApiSite): SearchResult[]
       desc: truncateDesc(item.vod_content),
       type_name: item.type_name,
       douban_id: item.vod_douban_id,
+      is_adult: apiSite.is_adult === true,
     };
   });
 }

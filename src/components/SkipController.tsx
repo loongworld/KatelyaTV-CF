@@ -52,7 +52,8 @@ export default function SkipController({
   const [showCountdown, setShowCountdown] = useState(false);
   const [countdownSeconds, setCountdownSeconds] = useState(0);
 
-  const lastSkipTimeRef = useRef<number>(0);
+  // 本次片尾是否已被用户手动取消：置位后不再自动开始倒计时，离开片尾区间或切集换源后复位
+  const dismissedEndingRef = useRef(false);
   const skipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const autoSkipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -98,7 +99,6 @@ export default function SkipController({
 
     const targetTime = segment.end + 1;
     artPlayerRef.current.currentTime = targetTime;
-    lastSkipTimeRef.current = Date.now();
 
     // 显示跳过提示
     if (artPlayerRef.current.notice) {
@@ -147,8 +147,11 @@ export default function SkipController({
       const timeToEnd = duration - time;
       const timeToSegmentStart = duration - segment.start;
       
-      // 当距离视频结束的时间等于设定的片尾开始时间时，开始倒计时
-      if (timeToEnd <= timeToSegmentStart && timeToEnd > 0 && !showCountdown) {
+      if (timeToEnd > timeToSegmentStart) {
+        // 还没进入片尾区间（含切集、换源后从头播放）：复位"已被用户取消"的标记
+        dismissedEndingRef.current = false;
+      } else if (timeToEnd > 0 && !showCountdown && !dismissedEndingRef.current) {
+        // 当距离视频结束的时间等于设定的片尾开始时间时，开始倒计时
         startEndingCountdown(Math.ceil(timeToEnd));
         break;
       }
@@ -169,8 +172,13 @@ export default function SkipController({
         
         // 检查是否开启自动跳过
         const hasAutoSkipSetting = skipConfig.segments.some(s => s.autoSkip !== false);
+
+        // 用户刚点过「取消」的片尾片段不再自动跳，退化成手动按钮：
+        // 否则倒计时虽被压住，这里仍会把进度条拽到片段末尾，观感还是「点了取消还在动」
+        const endingDismissed =
+          currentSegment.type === 'ending' && dismissedEndingRef.current;
         
-        if (hasAutoSkipSetting) {
+        if (hasAutoSkipSetting && !endingDismissed) {
           // 自动跳过：延迟1秒执行跳过
           if (autoSkipTimeoutRef.current) {
             clearTimeout(autoSkipTimeoutRef.current);
@@ -216,7 +224,6 @@ export default function SkipController({
 
     const targetTime = currentSkipSegment.end + 1; // 跳到片段结束后1秒
     artPlayerRef.current.currentTime = targetTime;
-    lastSkipTimeRef.current = Date.now();
 
     setShowSkipButton(false);
     setCurrentSkipSegment(null);
@@ -438,6 +445,11 @@ export default function SkipController({
     loadSkipConfig();
   }, [loadSkipConfig]);
 
+  // 切集 / 换源 / 换视频时复位"已被用户取消片尾"的标记
+  useEffect(() => {
+    dismissedEndingRef.current = false;
+  }, [source, id, title]);
+
   // 监听播放时间变化
   useEffect(() => {
     if (currentTime > 0) {
@@ -460,6 +472,27 @@ export default function SkipController({
     };
   }, []);
 
+  // 设置弹窗：Escape 关闭，并锁定 body 滚动
+  useEffect(() => {
+    if (!isSettingMode) return;
+
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onSettingModeChange?.(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isSettingMode, onSettingModeChange]);
+
   return (
     <div className="skip-controller">
       {/* 倒计时显示 - 片尾自动跳转下一集 */}
@@ -474,6 +507,8 @@ export default function SkipController({
             </span>
             <button
               onClick={() => {
+                // 记录用户已拒绝本次片尾自动跳转，避免下一帧重新开始倒计时
+                dismissedEndingRef.current = true;
                 setShowCountdown(false);
                 if (countdownIntervalRef.current) {
                   clearInterval(countdownIntervalRef.current);
@@ -507,8 +542,13 @@ export default function SkipController({
       {/* 设置模式面板 - 增强版批量设置 */}
       {isSettingMode && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[9999] p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="skip-settings-title"
+            className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+          >
+            <h3 id="skip-settings-title" className="text-lg font-semibold mb-4 text-gray-900 dark:text-gray-100">
               智能跳过设置
             </h3>
             

@@ -18,6 +18,7 @@ function DoubanPageClient() {
   const searchParams = useSearchParams();
   const [doubanData, setDoubanData] = useState<DoubanItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -113,17 +114,20 @@ function DoubanPageClient() {
   const loadInitialData = useCallback(async () => {
     try {
       setLoading(true);
+      setError(null);
       const data = await getDoubanCategories(getRequestParams(0));
 
       if (data.code === 200) {
         setDoubanData(data.list);
         setHasMore(data.list.length === 25);
-        setLoading(false);
       } else {
         throw new Error(data.message || '获取数据失败');
       }
     } catch (err) {
       console.error(err);
+      setError(err instanceof Error ? err.message : '获取数据失败');
+    } finally {
+      setLoading(false);
     }
   }, [type, primarySelection, secondarySelection, getRequestParams]);
 
@@ -311,7 +315,7 @@ function DoubanPageClient() {
           </div>
 
           {/* 加载更多指示器 */}
-          {hasMore && !loading && (
+          {hasMore && !loading && !error && (
             <div
               ref={(el) => {
                 if (el && el.offsetParent !== null) {
@@ -336,8 +340,23 @@ function DoubanPageClient() {
             <div className='text-center text-gray-500 py-8'>已加载全部内容</div>
           )}
 
+          {/* 请求失败提示 */}
+          {error && !loading && (
+            <div className='text-center py-8'>
+              <p className='text-sm sm:text-base text-gray-600 dark:text-gray-400 mb-4'>
+                {error}
+              </p>
+              <button
+                onClick={loadInitialData}
+                className='px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white text-sm font-medium transition-colors'
+              >
+                重试
+              </button>
+            </div>
+          )}
+
           {/* 空状态 */}
-          {!loading && doubanData.length === 0 && (
+          {!loading && !error && doubanData.length === 0 && (
             <div className='text-center text-gray-500 py-8'>暂无相关内容</div>
           )}
         </div>

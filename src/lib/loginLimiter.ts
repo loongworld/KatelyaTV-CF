@@ -53,32 +53,53 @@ export async function getLoginLockSeconds(
   return maxRemaining;
 }
 
+/**
+ * 记录一次失败。整段「读取旧计数 → 判断窗口 → 累加 → 写回」压进单条 UPSERT，
+ * 由 SQLite 串行化。原先的读-改-写实现里，两个并发请求会读到同一个 fail_count
+ * 再各自写回同一个值，5 次锁定的阈值因此被稀释。
+ */
 export async function recordLoginFailure(db: Db | null, keys: string[]): Promise<void> {
   if (!db) return;
   await ensureTable(db);
   const now = Date.now();
   for (const key of keys) {
-    const row = await db
-      .prepare('SELECT fail_count, window_start FROM login_attempts WHERE scope_key = ?')
-      .bind(key)
-      .first<{ fail_count: number; window_start: number }>();
-    let count = 1;
-    let windowStart = now;
-    if (row && now - row.window_start < WINDOW_MS) {
-      count = row.fail_count + 1;
-      windowStart = row.window_start;
-    }
-    const lockedUntil = count >= MAX_FAILURES ? now + LOCK_MS : 0;
     await db
       .prepare(
         `INSERT INTO login_attempts (scope_key, fail_count, window_start, locked_until)
-         VALUES (?, ?, ?, ?)
+         VALUES (?, 1, ?, 0)
          ON CONFLICT(scope_key) DO UPDATE SET
-           fail_count = excluded.fail_count,
-           window_start = excluded.window_start,
-           locked_until = excluded.locked_until`
+           fail_count = CASE
+             WHEN ? - login_attempts.window_start < ? THEN login_attempts.fail_count + 1
+             ELSE 1
+           END,
+           window_start = CASE
+             WHEN ? - login_attempts.window_start < ? THEN login_attempts.window_start
+             ELSE ?
+           END,
+           locked_until = CASE
+             WHEN (
+               CASE
+                 WHEN ? - login_attempts.window_start < ? THEN login_attempts.fail_count + 1
+                 ELSE 1
+               END
+             ) >= ? THEN ? + ?
+             ELSE 0
+           END`
       )
-      .bind(key, count, windowStart, lockedUntil)
+      .bind(
+        key,
+        now,
+        now,
+        WINDOW_MS,
+        now,
+        WINDOW_MS,
+        now,
+        now,
+        WINDOW_MS,
+        MAX_FAILURES,
+        now,
+        LOCK_MS
+      )
       .run();
   }
 }

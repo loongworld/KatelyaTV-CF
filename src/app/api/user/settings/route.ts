@@ -99,7 +99,19 @@ export async function PUT(request: NextRequest) {
     }
 
     const storage = getStorage();
-    await storage.setUserSettings(authInfo.username, DEFAULT_SETTINGS);
+    const current = await storage.getUserSettings(authInfo.username);
+
+    // 只重置用户可编辑项，管理员下发的托管字段必须原样保留，
+    // 否则用户点一次「重置」就能解开管理员强开的成人内容过滤
+    const next: UserSettings = { ...DEFAULT_SETTINGS };
+    if (current && current.can_disable_filter !== undefined) {
+      next.can_disable_filter = current.can_disable_filter;
+    }
+    if (current && current.managed_by_admin !== undefined) {
+      next.managed_by_admin = current.managed_by_admin;
+    }
+
+    await storage.setUserSettings(authInfo.username, next);
     return NextResponse.json({ success: true, message: '设置已重置' });
   } catch (error) {
     console.error('Error resetting user settings:', error);

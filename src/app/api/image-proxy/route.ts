@@ -4,8 +4,24 @@ import { addCorsHeaders, handleOptionsRequest } from '@/lib/cors';
 
 export const runtime = 'edge';
 
-const MAX_BYTES = 8 * 1024 * 1024; // 8MB
+const MAX_BYTES = 2 * 1024 * 1024; // 2MB
 const FETCH_TIMEOUT_MS = 8000;
+
+/**
+ * 只放行位图格式。此前用 `startsWith('image/')` 判断，等于把 image/svg+xml
+ * 原样回传本站源——访客打开一条构造好的链接就能在本站执行脚本，
+ * 进而以登录者身份调用 /api/admin/*。SVG 一律拒绝。
+ */
+const ALLOWED_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+]);
 
 // 处理OPTIONS预检请求（OrionTV客户端需要）
 export async function OPTIONS() {
@@ -15,14 +31,24 @@ export async function OPTIONS() {
 /** 判断主机名是否为内网/保留地址，防止 SSRF */
 function isBlockedHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal') ||
-    host.endsWith('.home.arpa') ||
-    host === '0.0.0.0'
-  ) {
+  if (host === 'localhost' || host === '0.0.0.0') {
+    return true;
+  }
+
+  // 通配 DNS 服务可以把任意 IP 编码进域名（例如 127.0.0.1.nip.io），
+  // 只做字面量判断挡不住它们，这里按后缀拦掉
+  const BLOCKED_SUFFIXES = [
+    '.localhost',
+    '.local',
+    '.internal',
+    '.home.arpa',
+    '.localtest.me',
+    '.lvh.me',
+    '.nip.io',
+    '.sslip.io',
+    '.xip.io',
+  ];
+  if (BLOCKED_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
     return true;
   }
 
@@ -98,12 +124,11 @@ export async function GET(request: Request) {
       );
     }
 
-    const contentType = imageResponse.headers.get('content-type') || '';
-    const isImage = contentType.toLowerCase().startsWith('image/');
+    const rawContentType = imageResponse.headers.get('content-type') || '';
+    const contentType = rawContentType.split(';')[0].trim().toLowerCase();
 
     // 豆瓣图床对无 Referer 请求会返回 418 但 body 仍是图片，按成功处理
-    const okStatus =
-      imageResponse.ok || (imageResponse.status === 418 && isImage);
+    const okStatus = imageResponse.ok || imageResponse.status === 418;
 
     if (!okStatus) {
       return addCorsHeaders(
@@ -111,9 +136,9 @@ export async function GET(request: Request) {
       );
     }
 
-    if (!isImage) {
+    if (!ALLOWED_IMAGE_TYPES.has(contentType)) {
       return addCorsHeaders(
-        NextResponse.json({ error: '目标不是图片' }, { status: 415 })
+        NextResponse.json({ error: '不支持的图片类型' }, { status: 415 })
       );
     }
 
@@ -124,20 +149,51 @@ export async function GET(request: Request) {
       );
     }
 
-    const buffer = await imageResponse.arrayBuffer();
-    if (buffer.byteLength > MAX_BYTES) {
-      return addCorsHeaders(
-        NextResponse.json({ error: '图片超过大小限制' }, { status: 413 })
-      );
+    // 流式读取并即时截断：原先先 arrayBuffer() 再判断体积，
+    // 没有 Content-Length 的流可以在判断之前就把 isolate 内存撑爆
+    const body = imageResponse.body;
+    if (!body) {
+      return addCorsHeaders(NextResponse.json({ error: '图片响应为空' }, { status: 502 }));
+    }
+
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        total += value.byteLength;
+        if (total > MAX_BYTES) {
+          await reader.cancel();
+          return addCorsHeaders(
+            NextResponse.json({ error: '图片超过大小限制' }, { status: 413 })
+          );
+        }
+        chunks.push(value);
+      }
+    } catch {
+      await reader.cancel().catch(() => undefined);
+      return addCorsHeaders(NextResponse.json({ error: '读取图片失败' }, { status: 502 }));
+    }
+
+    const merged = new Uint8Array(total);
+    let cursor = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, cursor);
+      cursor += chunk.byteLength;
     }
 
     const headers = new Headers();
     headers.set('Content-Type', contentType);
-    headers.set('Content-Length', String(buffer.byteLength));
-    // 站点已要求登录，不使用公开 CDN 缓存
-    headers.set('Cache-Control', 'private, max-age=604800');
+    headers.set('Content-Length', String(total));
+    headers.set('X-Content-Type-Options', 'nosniff');
+    headers.set('Content-Security-Policy', "default-src 'none'; sandbox");
+    // 位图内容稳定，交给浏览器缓存 7 天并允许 Cloudflare 边缘共享缓存
+    headers.set('Cache-Control', 'public, max-age=604800, s-maxage=604800, immutable');
 
-    return addCorsHeaders(new Response(buffer, { status: 200, headers }));
+    return addCorsHeaders(new Response(merged, { status: 200, headers }));
   } catch (error) {
     const aborted = error instanceof Error && error.name === 'AbortError';
     return addCorsHeaders(

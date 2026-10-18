@@ -114,6 +114,8 @@ export interface SearchResult {
   desc?: string;
   type_name?: string;
   douban_id?: number;
+  /** 是否来自成人源；搜索接口据此把结果分成 regular / adult 两组 */
+  is_adult?: boolean;
 }
 
 // 豆瓣数据结构

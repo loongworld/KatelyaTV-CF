@@ -9,6 +9,8 @@ export interface ApiSite {
   api: string;
   name: string;
   detail?: string;
+  /** 成人内容站点标记，搜索接口据此把结果分成两组 */
+  is_adult?: boolean;
 }
 
 interface ConfigFileStruct {
@@ -450,6 +452,8 @@ export async function getAvailableApiSites(filterAdult = false): Promise<ApiSite
     name: s.name,
     api: s.api,
     detail: s.detail,
+    // 必须带出去：搜索结果要靠它区分常规/成人两组，早先这里漏掉导致分组恒为空
+    is_adult: s.is_adult === true,
   }));
 }
 
@@ -496,6 +500,7 @@ export async function getFilteredApiSites(userName?: string): Promise<ApiSite[]>
     name: s.name,
     api: s.api,
     detail: s.detail,
+    is_adult: s.is_adult === true,
   }));
 }
 
@@ -518,5 +523,6 @@ export async function getAdultApiSites(): Promise<ApiSite[]> {
     name: s.name,
     api: s.api,
     detail: s.detail,
+    is_adult: true,
   }));
 }
