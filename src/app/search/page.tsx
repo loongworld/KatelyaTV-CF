@@ -242,12 +242,15 @@ function SearchPageClient() {
     setIsLoading(true);
     setShowResults(true);
 
-    router.push(`/search?q=${encodeURIComponent(trimmed)}`);
-    // 直接发请求
-    fetchSearchResults(trimmed);
-
-    // 保存到搜索历史 (事件监听会自动更新界面)
-    addSearchHistory(trimmed);
+    if (searchParams.get('q') === trimmed) {
+      // 关键词没变：URL 不变、不会触发 useEffect，这里直接查一次
+      fetchSearchResults(trimmed);
+      addSearchHistory(trimmed);
+    } else {
+      // URL 变化会触发 useEffect 统一加载。
+      // 不在这里直接 fetch，避免同一次搜索打两遍请求（各 40 个源）
+      router.push(`/search?q=${encodeURIComponent(trimmed)}`);
+    }
   };
 
   // 返回顶部功能
