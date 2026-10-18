@@ -29,6 +29,13 @@ export function getImageProxyUrl(): string | null {
 }
 
 /**
+ * 图片代理 URL 版本：每次修复图片输出相关的逻辑后 +1。
+ * 作用：让曾缓存过错误响应（旧版本会把上游坏数据当图片缓存 7 天）的浏览器
+ * 通过 URL 变化绕过旧缓存，无需用户手动强刷。
+ */
+const IMAGE_PROXY_VERSION = '2';
+
+/**
  * 处理图片 URL，如果设置了图片代理则使用代理
  */
 export function processImageUrl(originalUrl: string): string {
@@ -37,7 +44,10 @@ export function processImageUrl(originalUrl: string): string {
   const proxyUrl = getImageProxyUrl();
   if (!proxyUrl) return originalUrl;
 
-  return `${proxyUrl}${encodeURIComponent(originalUrl)}`;
+  // 仅在代理前缀带查询参数（内置形态 /api/image-proxy?url=）时附加版本参数，
+  // 避免破坏第三方前缀配置
+  const versionSuffix = proxyUrl.includes('?') ? `&v=${IMAGE_PROXY_VERSION}` : '';
+  return `${proxyUrl}${encodeURIComponent(originalUrl)}${versionSuffix}`;
 }
 
 /**

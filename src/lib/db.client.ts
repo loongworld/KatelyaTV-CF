@@ -841,9 +841,16 @@ export async function deleteSearchHistory(keyword: string): Promise<void> {
 
 // ---------------- 收藏相关 API ----------------
 
+/** getAllFavorites 后台同步节流状态（模块级，见函数注释） */
+let lastFavoritesSyncAt = 0;
+const FAVORITES_SYNC_INTERVAL_MS = 5000;
+
 /**
  * 获取全部收藏。
  * 数据库存储模式下使用混合缓存策略：优先返回缓存数据，后台异步同步最新数据。
+ *
+ * 后台同步节流：首页每张卡片挂载时都会查询收藏状态（isFavorited → 本函数），
+ * 5 秒内只允许发起一次后台同步，避免同一视图打出 N 个重复的 /api/favorites 请求。
  */
 export async function getAllFavorites(): Promise<Record<string, Favorite>> {
   // 服务器端渲染阶段直接返回空
@@ -857,23 +864,27 @@ export async function getAllFavorites(): Promise<Record<string, Favorite>> {
     const cachedData = cacheManager.getCachedFavorites();
 
     if (cachedData) {
-      // 返回缓存数据，同时后台异步更新
-      fetchFromApi<Record<string, Favorite>>(`/api/favorites`)
-        .then((freshData) => {
-          // 只有数据真正不同时才更新缓存
-          if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
-            cacheManager.cacheFavorites(freshData);
-            // 触发数据更新事件
-            window.dispatchEvent(
-              new CustomEvent('favoritesUpdated', {
-                detail: freshData,
-              })
-            );
-          }
-        })
-        .catch((err) => {
-          console.warn('后台同步收藏失败:', err);
-        });
+      // 返回缓存数据，同时后台异步更新（节流见函数注释）
+      const now = Date.now();
+      if (now - lastFavoritesSyncAt >= FAVORITES_SYNC_INTERVAL_MS) {
+        lastFavoritesSyncAt = now;
+        fetchFromApi<Record<string, Favorite>>(`/api/favorites`)
+          .then((freshData) => {
+            // 只有数据真正不同时才更新缓存
+            if (JSON.stringify(cachedData) !== JSON.stringify(freshData)) {
+              cacheManager.cacheFavorites(freshData);
+              // 触发数据更新事件
+              window.dispatchEvent(
+                new CustomEvent('favoritesUpdated', {
+                  detail: freshData,
+                })
+              );
+            }
+          })
+          .catch((err) => {
+            console.warn('后台同步收藏失败:', err);
+          });
+      }
 
       return cachedData;
     } else {
