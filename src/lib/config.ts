@@ -11,6 +11,8 @@ export interface ApiSite {
   detail?: string;
   /** 成人内容站点标记，搜索接口据此把结果分成两组 */
   is_adult?: boolean;
+  /** 源权重：数值越大越优先被搜索；缺省按 50 处理 */
+  weight?: number;
 }
 
 interface ConfigFileStruct {
@@ -454,6 +456,8 @@ export async function getAvailableApiSites(filterAdult = false): Promise<ApiSite
     detail: s.detail,
     // 必须带出去：搜索结果要靠它区分常规/成人两组，早先这里漏掉导致分组恒为空
     is_adult: s.is_adult === true,
+    // 权重也要带出去：搜索按权重决定查询顺序，缺省会按 50 处理
+    weight: typeof s.weight === 'number' ? s.weight : 50,
   }));
 }
 
