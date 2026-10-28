@@ -129,7 +129,11 @@ export function clearCookieOptions(requestUrl: string, httpOnly: boolean) {
 }
 
 export function encodeUserInfo(session: Session): string {
-  return encodeURIComponent(JSON.stringify({ username: session.username, role: session.role }));
+  // 注意：NextResponse.cookies.set() 会按 RFC 6265 自动编码一次，
+  // 这里再 encodeURIComponent 会造成双重编码（%257B...），前端 decode 一次拿到的是
+  // %7B... 而非 JSON，JSON.parse 失败后回退成 'default'，导致 /settings 等页面取不到用户。
+  // 因此这里返回原始 JSON，让 cookie 层自行编码。
+  return JSON.stringify({ username: session.username, role: session.role });
 }
 
 /**
