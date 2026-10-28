@@ -141,6 +141,10 @@ export interface ApiSite {
   type?: number;
   playMode?: 'parse' | 'direct';
   is_adult?: boolean; // 新增：是否为成人内容资源站
+  /** 源站点标识（api_site 字典的键，运行时由 config 层补上） */
+  key?: string;
+  /** 源权重，数值越大越优先查询；缺省按 50 处理 */
+  weight?: number;
 }
 
 // 配置文件结构
