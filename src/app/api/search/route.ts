@@ -163,6 +163,12 @@ export async function GET(request: Request) {
     const timer = setTimeout(() => controller.abort(), SEARCH_BUDGET_MS);
     const collected: SearchResult[] = [];
 
+    // 记录每条结果的来源权重，便于按权重排序（而非按响应速度）
+    const weightOf = new Map<string, number>();
+    batch.forEach((s) => weightOf.set(s.key, typeof s.weight === 'number' ? s.weight : 50));
+    const weighted: { item: SearchResult; w: number; seq: number }[] = [];
+    let seq = 0;
+
     try {
       await Promise.allSettled(
         batch.map(async (site) => {
@@ -170,17 +176,24 @@ export async function GET(request: Request) {
             maxPages: MAX_PAGES_PER_SOURCE,
             signal: controller.signal,
           });
-          for (const item of results) collected.push(item);
+          const w = weightOf.get(site.key) ?? 50;
+          for (const item of results) {
+            weighted.push({ item, w, seq: seq++ });
+            collected.push(item);
+          }
         })
       );
     } finally {
       clearTimeout(timer);
     }
 
+    // 按源权重降序，同权重保持响应顺序的稳定性
+    weighted.sort((a, b) => (b.w - a.w) || (a.seq - b.seq));
+
     // 按来源是否成人分组，而不是把结果混在一起
     const regular: SearchResult[] = [];
     const adult: SearchResult[] = [];
-    for (const item of collected) {
+    for (const { item } of weighted) {
       if (item.is_adult) adult.push(item);
       else regular.push(item);
     }
