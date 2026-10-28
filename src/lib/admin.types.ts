@@ -23,6 +23,8 @@ export interface AdminConfig {
     from: 'config' | 'custom';
     disabled?: boolean;
     is_adult?: boolean; // 新增：是否为成人内容资源站
+    /** 源权重：数值越大越优先被搜索，缺省 50 */
+    weight?: number;
   }[];
 }
 
