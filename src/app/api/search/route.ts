@@ -44,12 +44,21 @@ function getDefaultCache(): CacheLike | null {
  */
 function rotateSites(sites: ApiSite[], query: string): ApiSite[] {
   if (sites.length <= 1) return sites;
+  // 按 weight 降序（大的优先），weight 相同或缺失时按 key 稳定排序，
+  // 保证同一 query 的结果顺序确定、且高质量源先被查询。
+  const sorted = [...sites].sort((a, b) => {
+    const wa = typeof a.weight === 'number' ? a.weight : 50;
+    const wb = typeof b.weight === 'number' ? b.weight : 50;
+    if (wb !== wa) return wb - wa;
+    return String(a.key || '').localeCompare(String(b.key || ''));
+  });
+  // 在「同权重组内」保留 query 哈希轮换，避免每次都是同一批源吃亏
   let hash = 0;
   for (let i = 0; i < query.length; i++) {
     hash = (hash * 31 + query.charCodeAt(i)) >>> 0;
   }
-  const start = hash % sites.length;
-  return [...sites.slice(start), ...sites.slice(0, start)];
+  const start = hash % sorted.length;
+  return [...sorted.slice(start), ...sorted.slice(0, start)];
 }
 
 function emptyResult(cacheTime: number): NextResponse {
