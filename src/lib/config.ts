@@ -505,6 +505,7 @@ export async function getFilteredApiSites(userName?: string): Promise<ApiSite[]>
     api: s.api,
     detail: s.detail,
     is_adult: s.is_adult === true,
+    weight: typeof s.weight === 'number' ? s.weight : 50,
   }));
 }
 
