@@ -14,8 +14,8 @@ pages_build_output_dir = ".vercel/output/static"
 # 默认绑定（Pages 直连 Git 项目时以 Dashboard 配置为准）
 [[d1_databases]]
 binding = "DB"
-database_name = "katelyatv-db"
-database_id = "16e9bc7a-aa06-40e2-9a23-e6710a161244"
+database_name = "katelyatv-cf-db"
+database_id = "4585c3f3-75d3-49e3-8d8e-1741a99672fe"
 
 [vars]
 NEXT_PUBLIC_STORAGE_TYPE = "d1"
@@ -29,8 +29,8 @@ name = "katelyatv"
 
 [[env.production.d1_databases]]
 binding = "DB"
-database_name = "katelyatv-db"
-database_id = "16e9bc7a-aa06-40e2-9a23-e6710a161244"
+database_name = "katelyatv-cf-db"
+database_id = "4585c3f3-75d3-49e3-8d8e-1741a99672fe"
 
 [env.production.vars]
 NEXT_PUBLIC_STORAGE_TYPE = "d1"
@@ -44,8 +44,8 @@ name = "katelyatv-preview"
 
 [[env.preview.d1_databases]]
 binding = "DB"
-database_name = "katelyatv-db-preview"
-database_id = "253de8dc-bc91-4362-b150-a90e0b50ea9a"
+database_name = "katelyatv-cf-db"
+database_id = "4585c3f3-75d3-49e3-8d8e-1741a99672fe"
 
 [env.preview.vars]
 NEXT_PUBLIC_STORAGE_TYPE = "d1"
